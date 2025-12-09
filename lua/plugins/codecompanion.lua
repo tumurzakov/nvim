@@ -33,6 +33,13 @@ return {
   opts = {
     log_level = "debug",
     ignore_warnings = true,
+    display = {
+      chat = {
+        window = {
+          position = "right", -- open chat split on the right
+        },
+      },
+    },
     adapters = {
       http = {
         -- OpenRouter (uses OpenAI-compatible API)
@@ -56,7 +63,9 @@ return {
             schema = {
               model = { default = OLLAMA_MODEL },
             },
-            endpoint = OLLAMA_ENDPOINT,
+            env = {
+              url = OLLAMA_ENDPOINT,
+            },
           })
         end,
       },
@@ -81,11 +90,31 @@ return {
             schema = {
               model = { default = OLLAMA_MODEL },
             },
-            endpoint = OLLAMA_ENDPOINT,
+            env = {
+              url = OLLAMA_ENDPOINT,
+            },
           })
         end,
       },
     },
     strategies = STRATEGIES_CFG,
   },
+  config = function(_, opts)
+    require("codecompanion").setup(opts)
+
+    -- Alias: :CC (supports range + args) -> :CodeCompanionChat
+    vim.api.nvim_create_user_command("CC", function(args)
+      local range_prefix = ""
+      if args.range == 2 then
+        range_prefix = string.format("%d,%d", args.line1, args.line2)
+      end
+
+      local joined = table.concat(args.fargs, " ")
+      if joined ~= "" then
+        joined = " " .. joined
+      end
+
+      vim.cmd(string.format("%sCodeCompanion%s", range_prefix, joined))
+    end, { nargs = "*", range = true, desc = "Alias for CodeCompanion" })
+  end,
 }
