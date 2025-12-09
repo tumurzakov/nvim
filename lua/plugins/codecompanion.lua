@@ -4,6 +4,9 @@ local ok, secrets = pcall(require, "secrets")
 -- Centralize local, git-ignored config for models/keys/endpoints
 local cc = ok and (secrets.codecompanion or {}) or {}
 
+-- Strategies config
+local STRATEGIES_CFG = cc.strategies or {}
+
 -- Ollama local config
 local OLLAMA_CFG = cc.ollama or {}
 local OLLAMA_MODEL = OLLAMA_CFG.model or os.getenv("OLLAMA_MODEL") or "qwen3-coder:30b"
@@ -81,10 +84,6 @@ return {
         end,
       },
     },
-    strategies = {
-      cmd = { adapter = "ollama" },
-      chat = { adapter = "ollama" },
-      inline = { adapter = "ollama" },
-    },
+    strategies = STRATEGIES_CFG,
   },
 }

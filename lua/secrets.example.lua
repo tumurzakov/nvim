@@ -25,6 +25,12 @@ M.codecompanion = {
     --   ["X-Title"] = "Neovim CodeCompanion",
     -- },
   },
+
+  strategies = {
+    cmd = { adapter = "ollama" },
+    chat = { adapter = "ollama" },
+    inline = { adapter = "ollama" },
+  },
 }
 
 return M
