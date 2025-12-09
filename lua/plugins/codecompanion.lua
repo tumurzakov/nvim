@@ -37,12 +37,16 @@ return {
       http = {
         -- OpenRouter (uses OpenAI-compatible API)
         openrouter = function()
-          return require("openai_compatible").extend("openai_compatible", {
+          return require("codecompanion.adapters").extend("openai_compatible", {
             schema = {
               model = { default = OPENROUTER_MODEL },
             },
-            api_key = OPENROUTER_API_KEY,
-            endpoint = OPENROUTER_ENDPOINT,
+            env = {
+              api_key = OPENROUTER_API_KEY,
+              url = OPENROUTER_ENDPOINT,
+              chat_url = "/chat/completions", -- if endpoint already includes /v1
+              models_endpoint = "/models",
+            },
             headers = OPENROUTER_HEADERS,
           })
         end,
@@ -59,12 +63,16 @@ return {
       cmd = {
         -- OpenRouter (uses OpenAI-compatible API)
         openrouter = function()
-          return require("openai_compatible").extend("openai_compatible", {
+          return require("codecompanion.adapters").extend("openai_compatible", {
             schema = {
               model = { default = OPENROUTER_MODEL },
             },
-            api_key = OPENROUTER_API_KEY,
-            endpoint = OPENROUTER_ENDPOINT,
+            env = {
+              api_key = OPENROUTER_API_KEY,
+              url = OPENROUTER_ENDPOINT,
+              chat_url = "/chat/completions",
+              models_endpoint = "/models",
+            },
             headers = OPENROUTER_HEADERS,
           })
         end,
