@@ -3,6 +3,13 @@ return {
   dependencies = { "nvim-tree/nvim-web-devicons" },
   config = function()
     require("nvim-tree").setup({
+      filters = {
+        dotfiles = false,            -- показывать файлы, начинающиеся с точки
+        git_ignored = false,         -- отключить фильтрацию .gitignore
+      },
+      git = {
+        ignore = false,              -- также отключает глобальную фильтрацию gitignore
+      },
       renderer = {
         icons = {
           -- Use Nerd Font icons for files and folders
