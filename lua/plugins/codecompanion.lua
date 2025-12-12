@@ -62,6 +62,7 @@ return {
           return require("codecompanion.adapters").extend("ollama", {
             schema = {
               model = { default = OLLAMA_MODEL },
+              num_ctx = { default = 16384, },
             },
             env = {
               url = OLLAMA_ENDPOINT,
