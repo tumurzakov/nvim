@@ -73,3 +73,18 @@ vim.api.nvim_create_autocmd("CursorHold", {
     vim.diagnostic.open_float(nil, opts)
   end,
 })
+
+-- terminal-mode: Ctrl-b n / Ctrl-b p
+vim.keymap.set('t', '<C-b>n', [[<C-\><C-n>gt:startinsert<CR>]], { silent = true })
+vim.keymap.set('t', '<C-b>p', [[<C-\><C-n>gT:startinsert<CR>]], { silent = true })
+
+-- normal-mode (на всякий случай)
+vim.keymap.set('n', '<C-b>n', 'gt', { silent = true })
+vim.keymap.set('n', '<C-b>p', 'gT', { silent = true })
+
+-- open new term tab
+vim.keymap.set('n', '<C-b>c', function()
+  vim.cmd('tabnew')
+  vim.cmd('terminal')
+  vim.cmd('startinsert')
+end, { silent = true })
