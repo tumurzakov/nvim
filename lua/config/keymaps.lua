@@ -75,12 +75,47 @@ vim.api.nvim_create_autocmd("CursorHold", {
 })
 
 -- terminal-mode: Ctrl-b n / Ctrl-b p
-vim.keymap.set('t', '<C-b>n', [[<C-\><C-n>gt:startinsert<CR>]], { silent = true })
-vim.keymap.set('t', '<C-b>p', [[<C-\><C-n>gT:startinsert<CR>]], { silent = true })
+local function tab_terminal_next(dir)
+  -- dir: 1 = next tab, -1 = prev tab
+  if dir == 1 then
+    vim.cmd("tabnext")
+  else
+    vim.cmd("tabprevious")
+  end
 
--- normal-mode (на всякий случай)
-vim.keymap.set('n', '<C-b>n', 'gt', { silent = true })
-vim.keymap.set('n', '<C-b>p', 'gT', { silent = true })
+  -- 1) если текущий буфер уже терминал — просто стартуем insert
+  if vim.bo.buftype == "terminal" then
+    vim.cmd("startinsert")
+    return
+  end
+
+  -- 2) иначе попробуем найти терминал в любом окне текущего таба
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.bo[buf].buftype == "terminal" then
+      vim.api.nvim_set_current_win(win)
+      vim.cmd("startinsert")
+      return
+    end
+  end
+
+  -- 3) терминала в этом табе нет — остаёмся в normal (никаких startinsert)
+end
+
+-- terminal-mode
+vim.keymap.set("t", "<C-b>n", function()
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-\\><C-n>", true, false, true), "n", false)
+  tab_terminal_next(1)
+end, { silent = true })
+
+vim.keymap.set("t", "<C-b>p", function()
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-\\><C-n>", true, false, true), "n", false)
+  tab_terminal_next(-1)
+end, { silent = true })
+
+-- (опционально) normal-mode тоже так же
+vim.keymap.set("n", "<C-b>n", function() tab_terminal_next(1) end, { silent = true })
+vim.keymap.set("n", "<C-b>p", function() tab_terminal_next(-1) end, { silent = true })
 
 -- open new term tab
 vim.keymap.set('n', '<C-b>c', function()
