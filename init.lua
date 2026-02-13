@@ -11,8 +11,7 @@ vim.opt.rtp:prepend(lazypath)
 
 -- Load core settings and mappings first
 require("config.options")
-require("config.keymaps")
+require("config.keybindings")
 
 -- Load all plugin specs from lua/plugins/*
 require("lazy").setup("plugins")
-

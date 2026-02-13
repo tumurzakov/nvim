@@ -5,6 +5,27 @@ local M = {}
 
 -- CodeCompanion-local, git-ignored config
 M.codecompanion = {
+  -- ACP adapters (Codex/Gemini/Claude local CLIs)
+  acp = {
+    codex = {
+      auth_method = "chatgpt", -- "openai-api-key"|"codex-api-key"|"chatgpt"
+      -- command = "/opt/homebrew/bin/codex-acp", -- optional binary override
+      -- model = "gpt-5-codex",
+      -- api_key = "cmd:op read op://vault/codex/api_key --no-newline", -- CODEX_API_KEY
+      -- openai_api_key = "cmd:op read op://vault/openai/api_key --no-newline", -- OPENAI_API_KEY
+    },
+    gemini_cli = {
+      auth_method = "gemini-api-key", -- "oauth-personal"|"gemini-api-key"|"vertex-ai"
+      -- command = "/opt/homebrew/bin/gemini", -- optional binary override
+      -- model = "gemini-2.5-pro",
+      -- api_key = "cmd:op read op://vault/gemini/api_key --no-newline", -- GEMINI_API_KEY
+    },
+    claude_code = {
+      -- model = "claude-sonnet-4-20250514",
+      -- api_key = "cmd:op read op://vault/anthropic/api_key --no-newline", -- ANTHROPIC_API_KEY
+    },
+  },
+
   -- OpenRouter settings
   openrouter = {
     -- IMPORTANT: Fill in your OpenRouter API key below
@@ -26,11 +47,11 @@ M.codecompanion = {
   },
 
   -- Default strategies
-  -- Set the adapter to "openrouter" to use OpenRouter by default
+  -- ACP-first defaults
   strategies = {
-    cmd = { adapter = "openrouter" },
-    chat = { adapter = "openrouter" },
-    inline = { adapter = "openrouter" },
+    cmd = { adapter = "codex" },
+    chat = { adapter = "codex" },
+    inline = { adapter = "codex" },
   },
 }
 

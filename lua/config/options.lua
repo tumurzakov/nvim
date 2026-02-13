@@ -1,5 +1,6 @@
 -- Leader key
-vim.g.mapleader = " "
+vim.g.mapleader = "\\"
+vim.g.maplocalleader = "\\"
 
 -- Basic settings
 vim.o.number = true
@@ -12,4 +13,3 @@ vim.o.termguicolors = true
 -- nvim-tree: disable netrw to avoid conflicts
 vim.g.loaded_netrw = 1
 vim.g.loaded_netrwPlugin = 1
-

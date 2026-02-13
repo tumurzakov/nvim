@@ -5,7 +5,49 @@ local ok, secrets = pcall(require, "secrets")
 local cc = ok and (secrets.codecompanion or {}) or {}
 
 -- Strategies config
-local STRATEGIES_CFG = cc.strategies or {}
+local STRATEGIES_CFG = vim.tbl_deep_extend("force", {
+  cmd = { adapter = "codex" },
+  chat = { adapter = "codex" },
+  inline = { adapter = "codex" },
+}, cc.strategies or {})
+
+local function compact_env(env)
+  local out = {}
+  for key, value in pairs(env or {}) do
+    if value ~= nil and value ~= "" then
+      out[key] = value
+    end
+  end
+  return out
+end
+
+local function exepath_or(cmd)
+  local resolved = vim.fn.exepath(cmd)
+  if resolved ~= "" then
+    return resolved
+  end
+  return cmd
+end
+
+-- ACP local config
+local ACP_CFG = cc.acp or {}
+local CODEX_CFG = ACP_CFG.codex or {}
+local GEMINI_CFG = ACP_CFG.gemini_cli or {}
+local CLAUDE_CFG = ACP_CFG.claude_code or {}
+
+local CODEX_AUTH_METHOD = CODEX_CFG.auth_method or "chatgpt"
+local CODEX_MODEL = CODEX_CFG.model
+local CODEX_API_KEY = CODEX_CFG.api_key
+local OPENAI_API_KEY = CODEX_CFG.openai_api_key
+local CODEX_BIN = CODEX_CFG.command or exepath_or("codex-acp")
+
+local GEMINI_AUTH_METHOD = GEMINI_CFG.auth_method or "oauth-personal"
+local GEMINI_MODEL = GEMINI_CFG.model
+local GEMINI_API_KEY = GEMINI_CFG.api_key
+local GEMINI_BIN = GEMINI_CFG.command or exepath_or("gemini")
+
+local CLAUDE_MODEL = CLAUDE_CFG.model
+local ANTHROPIC_API_KEY = CLAUDE_CFG.api_key or os.getenv("ANTHROPIC_API_KEY")
 
 -- Ollama local config
 local OLLAMA_CFG = cc.ollama or {}
@@ -16,7 +58,7 @@ local OLLAMA_ENDPOINT = OLLAMA_CFG.endpoint or os.getenv("OLLAMA_ENDPOINT") or "
 local OPENROUTER_CFG = cc.openrouter or {}
 local OPENROUTER_API_KEY = OPENROUTER_CFG.api_key or os.getenv("OPENROUTER_API_KEY")
 local OPENROUTER_MODEL = OPENROUTER_CFG.model or "qwen/qwen3-coder:free"
-local OPENROUTER_ENDPOINT = OPENROUTER_CFG.endpoint or os.getenv("OPENROUTER_ENDPOINT") or "https://openrouter.ai/api"
+local OPENROUTER_ENDPOINT = OPENROUTER_CFG.endpoint or os.getenv("OPENROUTER_ENDPOINT") or "https://openrouter.ai/api/v1"
 local OPENROUTER_HEADERS = OPENROUTER_CFG.headers or {
   ["HTTP-Referer"] = "https://github.com/t-pot/gemini.nvim",
   ["X-Title"] = "Neovim CodeCompanion",
@@ -33,6 +75,32 @@ return {
   opts = {
     log_level = "debug",
     ignore_warnings = true,
+    interactions = {
+      chat = {
+        opts = {
+          system_prompt = function(ctx)
+            return ctx.default_system_prompt
+              .. string.format(
+                [[Additional context:
+All non-code text responses must be written in the %s language.
+The current date is %s.
+The user's Neovim version is %s.
+The user is working on a %s machine. Please respond with system specific commands if applicable.
+]],
+                ctx.language,
+                ctx.date,
+                ctx.nvim_version,
+                ctx.os
+              )
+              .. [[
+Formatting rule:
+- Never use markdown tables in responses.
+- Use plain bullets or short paragraphs instead.
+]]
+          end,
+        },
+      },
+    },
     display = {
       chat = {
         window = {
@@ -70,30 +138,58 @@ return {
           })
         end,
       },
-      cmd = {
-        -- OpenRouter (uses OpenAI-compatible API)
-        openrouter = function()
-          return require("codecompanion.adapters").extend("openai_compatible", {
-            schema = {
-              model = { default = OPENROUTER_MODEL },
+      acp = {
+        codex = function()
+          return require("codecompanion.adapters").extend("codex", {
+            commands = {
+              default = { CODEX_BIN },
             },
-            env = {
-              api_key = OPENROUTER_API_KEY,
-              url = OPENROUTER_ENDPOINT,
-              chat_url = "/chat/completions",
-              models_endpoint = "/models",
+            defaults = {
+              auth_method = CODEX_AUTH_METHOD, -- "openai-api-key"|"codex-api-key"|"chatgpt"
+              model = CODEX_MODEL,
             },
-            headers = OPENROUTER_HEADERS,
+            env = compact_env({
+              CODEX_API_KEY = CODEX_API_KEY,
+              OPENAI_API_KEY = OPENAI_API_KEY,
+            }),
           })
         end,
-        ollama = function()
-          return require("codecompanion.adapters").extend("ollama", {
-            schema = {
-              model = { default = OLLAMA_MODEL },
+        gemini = function()
+          return require("codecompanion.adapters").extend("gemini_cli", {
+            commands = {
+              default = { GEMINI_BIN, "--experimental-acp" },
             },
-            env = {
-              url = OLLAMA_ENDPOINT,
+            defaults = {
+              auth_method = GEMINI_AUTH_METHOD, -- "oauth-personal"|"gemini-api-key"|"vertex-ai"
+              model = GEMINI_MODEL,
             },
+            env = compact_env({
+              GEMINI_API_KEY = GEMINI_API_KEY,
+            }),
+          })
+        end,
+        gemini_cli = function()
+          return require("codecompanion.adapters").extend("gemini_cli", {
+            commands = {
+              default = { GEMINI_BIN, "--experimental-acp" },
+            },
+            defaults = {
+              auth_method = GEMINI_AUTH_METHOD, -- "oauth-personal"|"gemini-api-key"|"vertex-ai"
+              model = GEMINI_MODEL,
+            },
+            env = compact_env({
+              GEMINI_API_KEY = GEMINI_API_KEY,
+            }),
+          })
+        end,
+        claude_code = function()
+          return require("codecompanion.adapters").extend("claude_code", {
+            schema = CLAUDE_MODEL and {
+              model = { default = CLAUDE_MODEL },
+            } or nil,
+            env = compact_env({
+              ANTHROPIC_API_KEY = ANTHROPIC_API_KEY,
+            }),
           })
         end,
       },
@@ -101,6 +197,20 @@ return {
     strategies = STRATEGIES_CFG,
   },
   config = function(_, opts)
+    if opts.adapters then
+      opts.adapters.http = opts.adapters.http or {}
+
+      if opts.adapters.cmd then
+        opts.adapters.http = vim.tbl_deep_extend("force", opts.adapters.http, opts.adapters.cmd)
+        opts.adapters.cmd = nil
+      end
+
+      if opts.adapters.opts then
+        opts.adapters.http.opts = vim.tbl_deep_extend("force", opts.adapters.http.opts or {}, opts.adapters.opts)
+        opts.adapters.opts = nil
+      end
+    end
+
     require("codecompanion").setup(opts)
 
     -- Alias: :CC (supports range + args) -> :CodeCompanionChat

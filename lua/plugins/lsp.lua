@@ -5,14 +5,26 @@ return {
     "williamboman/mason-lspconfig.nvim",
   },
   config = function()
+    vim.filetype.add({
+      filename = { ["go.work"] = "gowork" },
+      extension = { gotmpl = "gotmpl" },
+    })
+
     -- Mason setup
     require("mason").setup()
     require("mason-lspconfig").setup({
-      ensure_installed = { "pyright", "gopls" },
+      ensure_installed = { "pyright", "ruff", "gopls" },
       automatic_installation = true,
     })
 
     local capabilities = require("cmp_nvim_lsp").default_capabilities()
+    local cfg_dir = vim.fn.stdpath("config")
+    local function resolve_cmd(bin, args)
+      local cmd = { bin }
+      vim.list_extend(cmd, args or {})
+      return cmd
+    end
+
     local on_attach = function(_, bufnr)
       local opts = { buffer = bufnr, silent = true, noremap = true }
       vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
@@ -26,45 +38,50 @@ return {
       end, opts)
     end
 
-    -- Start servers using vim.lsp.start with lspconfig defaults
-    local function start_from_lspconfig(server)
-      local ok, cfg = pcall(require, "lspconfig.server_configurations." .. server)
-      if not ok then return end
-      local default = cfg.default_config or {}
-      local name = default.name or server
-      local function launch(bufnr)
-        local fname = vim.api.nvim_buf_get_name(bufnr)
-        local root_dir = default.root_dir and default.root_dir(fname) or vim.loop.cwd()
-        if not root_dir or root_dir == "" then root_dir = vim.loop.cwd() end
-        for _, client in ipairs(vim.lsp.get_clients({ bufnr = bufnr })) do
-          if client.name == name then return end
-        end
-        local config = vim.tbl_deep_extend("force", default, {
-          name = name,
-          root_dir = root_dir,
-          capabilities = capabilities,
-          on_attach = on_attach,
-        })
-        vim.lsp.start(config)
-      end
-      return launch
-    end
-
-    vim.api.nvim_create_autocmd("FileType", {
-      pattern = { "python" },
-      callback = function(ev)
-        local launch = start_from_lspconfig("pyright")
-        if launch then launch(ev.buf) end
-      end,
+    vim.lsp.config("pyright", {
+      cmd = { cfg_dir .. "/bin/pyright-langserver-wrapper" },
+      capabilities = capabilities,
+      on_attach = on_attach,
+      root_markers = {
+        "pyproject.toml",
+        "poetry.lock",
+        "setup.py",
+        "setup.cfg",
+        "requirements.txt",
+        "Pipfile",
+        ".git"
+      },
+      settings = {
+        python = {
+          analysis = {
+            autoSearchPaths = true,
+            useLibraryCodeForTypes = true,
+            diagnosticMode = "openFilesOnly",
+          },
+        },
+      },
     })
 
-    vim.api.nvim_create_autocmd("FileType", {
-      pattern = { "go", "gomod", "gowork" },
-      callback = function(ev)
-        local launch = start_from_lspconfig("gopls")
-        if launch then launch(ev.buf) end
+    vim.lsp.config("ruff", {
+      cmd = resolve_cmd("ruff", { "server" }),
+      capabilities = capabilities,
+      on_attach = on_attach,
+    })
+
+    vim.lsp.config("gopls", {
+      cmd = resolve_cmd("gopls"),
+      filetypes = { "go", "gomod" },
+      capabilities = capabilities,
+      on_attach = on_attach,
+    })
+
+    vim.lsp.enable({ "pyright", "ruff", "gopls" })
+    vim.api.nvim_create_autocmd("VimEnter", {
+      group = vim.api.nvim_create_augroup("user.lsp.bootstrap", { clear = true }),
+      once = true,
+      callback = function()
+        vim.cmd.doautoall("nvim.lsp.enable FileType")
       end,
     })
   end,
 }
-

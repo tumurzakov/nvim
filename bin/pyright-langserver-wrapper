@@ -1,0 +1,7 @@
+#!/bin/sh
+
+if [ -f "poetry.lock" ]; then
+  exec poetry run pyright-langserver --stdio
+fi
+
+exec pyright-langserver --stdio
