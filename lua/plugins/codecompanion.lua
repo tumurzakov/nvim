@@ -33,7 +33,7 @@ end
 local ACP_CFG = cc.acp or {}
 local CODEX_CFG = ACP_CFG.codex or {}
 local GEMINI_CFG = ACP_CFG.gemini_cli or {}
-local CLAUDE_CFG = ACP_CFG.claude_code or {}
+local CLAUDE_CFG = cc.claude_code or ACP_CFG.claude_code or {}
 
 local CODEX_AUTH_METHOD = CODEX_CFG.auth_method or "chatgpt"
 local CODEX_MODEL = CODEX_CFG.model
@@ -47,7 +47,7 @@ local GEMINI_API_KEY = GEMINI_CFG.api_key
 local GEMINI_BIN = GEMINI_CFG.command or exepath_or("gemini")
 
 local CLAUDE_MODEL = CLAUDE_CFG.model
-local ANTHROPIC_API_KEY = CLAUDE_CFG.api_key or os.getenv("ANTHROPIC_API_KEY")
+local CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_CFG.api_key or os.getenv("CLAUDE_CODE_OAUTH_TOKEN=")
 
 -- Ollama local config
 local OLLAMA_CFG = cc.ollama or {}
@@ -184,11 +184,8 @@ Formatting rule:
         end,
         claude_code = function()
           return require("codecompanion.adapters").extend("claude_code", {
-            schema = CLAUDE_MODEL and {
-              model = { default = CLAUDE_MODEL },
-            } or nil,
             env = compact_env({
-              ANTHROPIC_API_KEY = ANTHROPIC_API_KEY,
+              CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_CODE_OAUTH_TOKEN,
             }),
           })
         end,
@@ -229,3 +226,5 @@ Formatting rule:
     end, { nargs = "*", range = true, desc = "Alias for CodeCompanion" })
   end,
 }
+
+
