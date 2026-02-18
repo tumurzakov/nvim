@@ -435,7 +435,7 @@ end
 -- Core keybindings
 map("n", "<leader>e", "<cmd>Ex<CR>", { desc = "File explorer" })
 map("i", "jk", "<Esc>", { desc = "Leave insert mode" })
-map("n", "§", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle tree" })
+map("n", "`", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle tree" })
 
 -- CodeCompanion
 map({ "n", "v" }, "<C-l>", open_codecompanion_chat_with_selection, { desc = "CodeCompanion chat with selection" })
