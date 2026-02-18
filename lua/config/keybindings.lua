@@ -402,6 +402,36 @@ local function run_ruff_fix_current_file()
   end, 2500)
 end
 
+local function run_current_python_script()
+  local file = vim.fn.expand("%:p")
+  if file == "" then
+    print("No file in current buffer")
+    return
+  end
+
+  if vim.bo.filetype ~= "python" and not file:match("%.py$") then
+    print("Current buffer is not a Python file")
+    return
+  end
+
+  if vim.bo.modified then
+    vim.cmd("write")
+  end
+
+  run_command_in_terminal("poetry run python " .. vim.fn.shellescape(file), file)
+end
+
+local function reload_nvim_config()
+  local ok, err = pcall(dofile, vim.fn.stdpath("config") .. "/init.lua")
+  if not ok then
+    vim.notify("Config reload failed: " .. tostring(err), vim.log.levels.ERROR)
+    return
+  end
+
+  pcall(vim.cmd, "Lazy reload")
+  vim.notify("Neovim config reloaded", vim.log.levels.INFO)
+end
+
 -- Core keybindings
 map("n", "<leader>e", "<cmd>Ex<CR>", { desc = "File explorer" })
 map("i", "jk", "<Esc>", { desc = "Leave insert mode" })
@@ -446,3 +476,9 @@ map("n", "<leader>ta", run_pytest_all, { desc = "Pytest all (poetry)" })
 map("n", "<leader>tf", run_pytest_file, { desc = "Pytest file (poetry)" })
 map({ "n", "v" }, "<leader>tn", run_pytest_nearest, { desc = "Pytest nearest (poetry)" })
 map("n", "<leader>rx", run_ruff_fix_current_file, { desc = "Ruff check --fix (poetry)" })
+map("n", "<leader>x", run_current_python_script, { desc = "Run current Python file (poetry)" })
+
+pcall(vim.api.nvim_del_user_command, "ReloadConfig")
+vim.api.nvim_create_user_command("ReloadConfig", reload_nvim_config, {
+  desc = "Reload Neovim config and Lazy specs",
+})
