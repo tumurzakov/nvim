@@ -435,12 +435,13 @@ end
 -- Core keybindings
 map("n", "<leader>e", "<cmd>Ex<CR>", { desc = "File explorer" })
 map("i", "jk", "<Esc>", { desc = "Leave insert mode" })
-map("n", "`", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle tree" })
+map("n", "<leader>tt", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle tree" })
 
 -- CodeCompanion
 map({ "n", "v" }, "<C-l>", open_codecompanion_chat_with_selection, { desc = "CodeCompanion chat with selection" })
 map({ "n", "v" }, "<C-k>", cc_k.short_explain, { desc = "CodeCompanion short explain (K window)" })
 map("n", "<leader>cc", "<cmd>CodeCompanionChat<CR>", { desc = "CodeCompanion chat" })
+map("n", "<leader>cm", "<cmd>CodeCompanion /commit<CR>", { desc = "CodeCompanion commit message" })
 map("v", "<leader>ca", "<cmd>CodeCompanionActions<CR>", { desc = "CodeCompanion actions" })
 
 -- Diagnostics
@@ -482,3 +483,9 @@ pcall(vim.api.nvim_del_user_command, "ReloadConfig")
 vim.api.nvim_create_user_command("ReloadConfig", reload_nvim_config, {
   desc = "Reload Neovim config and Lazy specs",
 })
+
+-- Local (git-ignored) key overrides: lua/config/keybindings_local.lua
+local ok_local, local_keybindings = pcall(require, "config.keybindings_local")
+if ok_local and type(local_keybindings.apply) == "function" then
+  local_keybindings.apply(map)
+end

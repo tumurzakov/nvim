@@ -226,5 +226,3 @@ Formatting rule:
     end, { nargs = "*", range = true, desc = "Alias for CodeCompanion" })
   end,
 }
-
-
