@@ -436,6 +436,7 @@ end
 map("n", "<leader>e", "<cmd>Ex<CR>", { desc = "File explorer" })
 map("i", "jk", "<Esc>", { desc = "Leave insert mode" })
 map("n", "<leader>tt", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle tree" })
+map("n", "<F9>", "<cmd>AerialToggle!<CR>", { desc = "Toggle aerial" })
 
 -- CodeCompanion
 map({ "n", "v" }, "<C-l>", open_codecompanion_chat_with_selection, { desc = "CodeCompanion chat with selection" })
