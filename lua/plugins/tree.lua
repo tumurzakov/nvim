@@ -29,8 +29,9 @@ return {
 
         -- ТУТ главное:
         -- В нормальном режиме внутри nvim-tree:
-        -- жмём "p" => preview without leaving tree focus
-        vim.keymap.set("n", "p", api.node.open.preview_no_picker, opts("Preview (keep focus)"))
+        -- оставляем "p" под дефолтный paste (нужно для c + p),
+        -- а preview переносим на "P"
+        vim.keymap.set("n", "P", api.node.open.preview_no_picker, opts("Preview (keep focus)"))
         -- жмём "t" => открыть в новом табе
         vim.keymap.set("n", "t", api.node.open.tab, opts("Open in new tab"))
         -- при желании можно ещё добавить "T" на tab drop:

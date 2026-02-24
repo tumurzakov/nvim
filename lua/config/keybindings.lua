@@ -251,6 +251,38 @@ local function project_root_for_path(path)
   return vim.fn.getcwd()
 end
 
+local function has_pyproject(path_for_root)
+  local root = project_root_for_path(path_for_root or "")
+  local pyproject = vim.fs.find("pyproject.toml", { path = root, upward = false })[1]
+  return pyproject ~= nil
+end
+
+local function poetry_prefix(path_for_root)
+  if vim.fn.executable("poetry") == 1 and has_pyproject(path_for_root) then
+    return "poetry run "
+  end
+  return ""
+end
+
+local function join_command(cmd, args)
+  if args == nil or args == "" then
+    return cmd
+  end
+  return cmd .. " " .. args
+end
+
+local function build_python_command(args, path_for_root)
+  return join_command(poetry_prefix(path_for_root) .. "python", args)
+end
+
+local function build_pytest_command(args, path_for_root)
+  return join_command(poetry_prefix(path_for_root) .. "pytest", args)
+end
+
+local function build_ruff_command(args, path_for_root)
+  return join_command(poetry_prefix(path_for_root) .. "ruff", args)
+end
+
 local function run_command_in_terminal(command, path_for_root)
   local function ensure_right_split_terminal_channel()
     local existing_win = find_terminal_window()
@@ -342,7 +374,8 @@ local function nearest_pytest_nodeid()
 end
 
 local function run_pytest_all()
-  run_command_in_terminal("poetry run pytest", vim.fn.expand("%:p"))
+  local file = vim.fn.expand("%:p")
+  run_command_in_terminal(build_pytest_command("", file), file)
 end
 
 local function run_pytest_file()
@@ -351,7 +384,7 @@ local function run_pytest_file()
     print("No file in current buffer")
     return
   end
-  run_command_in_terminal("poetry run pytest " .. vim.fn.shellescape(file), file)
+  run_command_in_terminal(build_pytest_command(vim.fn.shellescape(file), file), file)
 end
 
 local function run_pytest_nearest()
@@ -371,7 +404,7 @@ local function run_pytest_nearest()
     return
   end
 
-  run_command_in_terminal("poetry run pytest " .. vim.fn.shellescape(nodeid), file)
+  run_command_in_terminal(build_pytest_command(vim.fn.shellescape(nodeid), file), file)
 end
 
 local function run_ruff_fix_current_file()
@@ -386,7 +419,7 @@ local function run_ruff_fix_current_file()
     vim.cmd("write")
   end
 
-  run_command_in_terminal("poetry run ruff check --fix " .. vim.fn.shellescape(file), file)
+  run_command_in_terminal(build_ruff_command("check --fix " .. vim.fn.shellescape(file), file), file)
 
   -- Ruff runs asynchronously in terminal; check and reload buffer after it likely completes.
   vim.defer_fn(function()
@@ -418,7 +451,7 @@ local function run_current_python_script()
     vim.cmd("write")
   end
 
-  run_command_in_terminal("poetry run python " .. vim.fn.shellescape(file), file)
+  run_command_in_terminal(build_python_command(vim.fn.shellescape(file), file), file)
 end
 
 local function reload_nvim_config()
@@ -473,12 +506,12 @@ map("n", "<C-b>v", open_terminal_vsplit_and_return_focus, { desc = "Open termina
 map("n", "<leader>r", toggle_terminal_vsplit_and_return_focus, { desc = "Toggle terminal vsplit" })
 map("v", "<leader>r", run_visual_selection_in_terminal, { desc = "Run selection in terminal" })
 
--- Pytest (Poetry)
-map("n", "<leader>ta", run_pytest_all, { desc = "Pytest all (poetry)" })
-map("n", "<leader>tf", run_pytest_file, { desc = "Pytest file (poetry)" })
-map({ "n", "v" }, "<leader>tn", run_pytest_nearest, { desc = "Pytest nearest (poetry)" })
-map("n", "<leader>rx", run_ruff_fix_current_file, { desc = "Ruff check --fix (poetry)" })
-map("n", "<leader>x", run_current_python_script, { desc = "Run current Python file (poetry)" })
+-- Python tools (prefer Poetry when available)
+map("n", "<leader>ta", run_pytest_all, { desc = "Pytest all" })
+map("n", "<leader>tf", run_pytest_file, { desc = "Pytest file" })
+map({ "n", "v" }, "<leader>tn", run_pytest_nearest, { desc = "Pytest nearest" })
+map("n", "<leader>rx", run_ruff_fix_current_file, { desc = "Ruff check --fix" })
+map("n", "<leader>x", run_current_python_script, { desc = "Run current Python file" })
 
 pcall(vim.api.nvim_del_user_command, "ReloadConfig")
 vim.api.nvim_create_user_command("ReloadConfig", reload_nvim_config, {
