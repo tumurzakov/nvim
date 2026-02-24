@@ -272,7 +272,13 @@ local function join_command(cmd, args)
 end
 
 local function build_python_command(args, path_for_root)
-  return join_command(poetry_prefix(path_for_root) .. "python", args)
+  local prefix = poetry_prefix(path_for_root)
+  if prefix ~= "" then
+    return join_command(prefix .. "python", args)
+  end
+
+  local python_bin = vim.fn.executable("python3") == 1 and "python3" or "python"
+  return join_command(python_bin, args)
 end
 
 local function build_pytest_command(args, path_for_root)
