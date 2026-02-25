@@ -101,6 +101,20 @@ Formatting rule:
         },
       },
     },
+    rules = {
+      NoTables = {
+        description = "Force plain-text formatting without markdown tables",
+        parser = "codecompanion",
+        files = {
+          vim.fs.joinpath(vim.fn.stdpath("config"), "codecompanion_rules", "no_tables.md"),
+        },
+      },
+      opts = {
+        chat = {
+          autoload = { "default", "NoTables" },
+        },
+      },
+    },
     display = {
       chat = {
         window = {

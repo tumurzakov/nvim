@@ -59,6 +59,212 @@ local function open_codecompanion_chat_with_selection()
   end)
 end
 
+local function rewrite_visual_selection_with_codecompanion()
+  local mode = vim.fn.mode()
+  if not mode:match("[vV\22]") then
+    vim.notify("Use this mapping in visual mode", vim.log.levels.WARN)
+    return
+  end
+
+  local selected = get_visual_selection_from_marks()
+  if not selected or vim.trim(selected) == "" then
+    vim.notify("No selected text", vim.log.levels.WARN)
+    return
+  end
+
+  local commands = {}
+  for cmd in selected:gmatch("!([^!\n]+)!") do
+    local trimmed = vim.trim(cmd)
+    if trimmed ~= "" then
+      table.insert(commands, trimmed)
+    end
+  end
+
+  local ok_context, context_utils = pcall(require, "codecompanion.utils.context")
+  local ok_inline, inline_mod = pcall(require, "codecompanion.interactions.inline")
+  if not (ok_context and ok_inline) then
+    vim.notify("CodeCompanion inline is not available", vim.log.levels.ERROR)
+    return
+  end
+
+  local function open_inline_status_window()
+    local ui = {}
+    ui.bufnr = vim.api.nvim_create_buf(false, true)
+    if not ui.bufnr then
+      return nil
+    end
+
+    local width = math.max(40, math.floor(vim.o.columns * 0.38))
+    local height = 6
+    local row = math.floor((vim.o.lines - height) / 2 - 1)
+    local col = math.floor((vim.o.columns - width) / 2)
+
+    ui.winnr = vim.api.nvim_open_win(ui.bufnr, false, {
+      relative = "editor",
+      row = math.max(0, row),
+      col = math.max(0, col),
+      width = width,
+      height = height,
+      style = "minimal",
+      border = "rounded",
+      title = " CodeCompanion ",
+      title_pos = "center",
+      focusable = false,
+      noautocmd = true,
+    })
+    if not ui.winnr or not vim.api.nvim_win_is_valid(ui.winnr) then
+      pcall(vim.api.nvim_buf_delete, ui.bufnr, { force = true })
+      return nil
+    end
+
+    vim.bo[ui.bufnr].buftype = "nofile"
+    vim.bo[ui.bufnr].bufhidden = "wipe"
+    vim.bo[ui.bufnr].swapfile = false
+    vim.bo[ui.bufnr].modifiable = false
+
+    ui.spinner_frames = { "-", "\\", "|", "/" }
+    ui.spinner_idx = 1
+    ui.phase = "Preparing request..."
+
+    ui.render = function()
+      if not (ui.bufnr and vim.api.nvim_buf_is_valid(ui.bufnr)) then
+        return
+      end
+      vim.bo[ui.bufnr].modifiable = true
+      local frame = ui.spinner_frames[ui.spinner_idx]
+      vim.api.nvim_buf_set_lines(ui.bufnr, 0, -1, false, {
+        "",
+        "  " .. frame .. "  " .. ui.phase,
+        "",
+        "  Running inline rewrite on selected text...",
+        "",
+      })
+      vim.bo[ui.bufnr].modifiable = false
+    end
+
+    ui.set_phase = function(phase)
+      ui.phase = phase
+      ui.render()
+    end
+
+    ui.timer = vim.uv.new_timer()
+    if ui.timer then
+      ui.timer:start(0, 120, vim.schedule_wrap(function()
+        ui.spinner_idx = (ui.spinner_idx % #ui.spinner_frames) + 1
+        ui.render()
+      end))
+    end
+
+    ui.close = function()
+      if ui.timer then
+        ui.timer:stop()
+        ui.timer:close()
+        ui.timer = nil
+      end
+      if ui.winnr and vim.api.nvim_win_is_valid(ui.winnr) then
+        pcall(vim.api.nvim_win_close, ui.winnr, true)
+      end
+      if ui.bufnr and vim.api.nvim_buf_is_valid(ui.bufnr) then
+        pcall(vim.api.nvim_buf_delete, ui.bufnr, { force = true })
+      end
+    end
+
+    ui.render()
+    return ui
+  end
+
+  local status_ui = open_inline_status_window()
+  local inline_finished = false
+  local augroup = vim.api.nvim_create_augroup("cc_inline_rewrite_status_" .. tostring(vim.uv.hrtime()), { clear = true })
+
+  vim.api.nvim_create_autocmd("User", {
+    group = augroup,
+    pattern = "CodeCompanionRequestStarted",
+    callback = function(ev)
+      if ev.data and ev.data.interaction == "inline" and status_ui then
+        status_ui.set_phase("Sending request to model...")
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("User", {
+    group = augroup,
+    pattern = "CodeCompanionRequestFinished",
+    callback = function(ev)
+      if ev.data and ev.data.interaction == "inline" and status_ui and not inline_finished then
+        status_ui.set_phase("Model responded. Finalizing...")
+        vim.defer_fn(function()
+          if status_ui then
+            status_ui.close()
+          end
+          pcall(vim.api.nvim_del_augroup_by_id, augroup)
+        end, 700)
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("User", {
+    group = augroup,
+    pattern = "CodeCompanionInlineFinished",
+    callback = function()
+      inline_finished = true
+      if status_ui then
+        status_ui.set_phase("Applying text replacement...")
+      end
+      vim.defer_fn(function()
+        if status_ui then
+          status_ui.close()
+        end
+        pcall(vim.api.nvim_del_augroup_by_id, augroup)
+      end, 300)
+    end,
+  })
+
+  leave_visual_mode()
+
+  local prompt_lines = {
+    "Rewrite ONLY the selected text and replace selection with result.",
+    "Default behavior (when no explicit command): translate to English, then improve grammar and clarity.",
+    "Preserve meaning and facts unchanged.",
+    "Never invent details, entities, numbers, or claims that are not in the selected text.",
+    "Keep text close to the original wording and tone.",
+    "If the selected text includes !command! markers, execute those commands.",
+    "Never include !command! markers in final output.",
+    "Return ONLY final text. No markdown fences. No explanations.",
+  }
+
+  if #commands > 0 then
+    table.insert(prompt_lines, "")
+    table.insert(prompt_lines, "Detected commands:")
+    for _, cmd in ipairs(commands) do
+      table.insert(prompt_lines, "- " .. cmd)
+    end
+  end
+
+  local prompt = table.concat(prompt_lines, "\n")
+
+  local context = context_utils.get(vim.api.nvim_get_current_buf(), { range = 2 })
+  local inline = inline_mod.new({
+    buffer_context = context,
+    opts = { placement = "replace" },
+    placement = "replace",
+  })
+
+  if not inline then
+    if status_ui then
+      status_ui.close()
+    end
+    pcall(vim.api.nvim_del_augroup_by_id, augroup)
+    vim.notify("Failed to start CodeCompanion inline", vim.log.levels.ERROR)
+    return
+  end
+
+  if status_ui then
+    status_ui.set_phase("Waiting for model...")
+  end
+  inline:prompt(prompt)
+end
+
 local function open_diagnostics_float()
   vim.diagnostic.open_float(nil, {
     focusable = false,
@@ -98,22 +304,61 @@ local function open_new_terminal_tab()
   vim.cmd("startinsert")
 end
 
-local function open_terminal_vsplit_and_return_focus()
+local function terminal_kind(win)
+  local ok, kind = pcall(vim.api.nvim_win_get_var, win, "cc_terminal_kind")
+  if ok then
+    return kind
+  end
+  return nil
+end
+
+local function find_terminal_window_by_kind(kind)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.bo[buf].buftype == "terminal" and terminal_kind(win) == kind then
+      return win
+    end
+  end
+  return nil
+end
+
+local function open_terminal_split_and_return_focus()
   local origin_win = vim.api.nvim_get_current_win()
-  vim.cmd("botright vsplit")
+  local height = math.max(3, math.floor(vim.o.lines * 0.15))
+  vim.cmd("botright " .. tostring(height) .. "split")
   vim.cmd("terminal")
+  local term_win = vim.api.nvim_get_current_win()
+  pcall(vim.api.nvim_win_set_var, term_win, "cc_terminal_kind", "split")
   if origin_win and vim.api.nvim_win_is_valid(origin_win) then
     vim.api.nvim_set_current_win(origin_win)
   end
 end
 
+local function open_terminal_vsplit_and_return_focus()
+  local origin_win = vim.api.nvim_get_current_win()
+  vim.cmd("botright vsplit")
+  vim.cmd("terminal")
+  local term_win = vim.api.nvim_get_current_win()
+  pcall(vim.api.nvim_win_set_var, term_win, "cc_terminal_kind", "vsplit")
+  if origin_win and vim.api.nvim_win_is_valid(origin_win) then
+    vim.api.nvim_set_current_win(origin_win)
+  end
+end
+
+local function toggle_terminal_split_and_return_focus()
+  local win = find_terminal_window_by_kind("split")
+  if win and vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_win_close(win, true)
+    return
+  end
+  open_terminal_split_and_return_focus()
+end
+
 local function toggle_terminal_vsplit_and_return_focus()
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    local buf = vim.api.nvim_win_get_buf(win)
-    if vim.bo[buf].buftype == "terminal" then
-      vim.api.nvim_win_close(win, true)
-      return
-    end
+  local win = find_terminal_window_by_kind("vsplit")
+  if win and vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_win_close(win, true)
+    return
   end
   open_terminal_vsplit_and_return_focus()
 end
@@ -520,6 +765,7 @@ map("n", "<F9>", "<cmd>AerialToggle!<CR>", { desc = "Toggle aerial" })
 -- CodeCompanion
 map({ "n", "v" }, "<C-l>", open_codecompanion_chat_with_selection, { desc = "CodeCompanion chat with selection" })
 map({ "n", "v" }, "<C-k>", cc_k.short_explain, { desc = "CodeCompanion short explain (K window)" })
+map("v", "<leader>ci", rewrite_visual_selection_with_codecompanion, { desc = "Rewrite selected text (CodeCompanion)" })
 map("n", "<leader>cc", "<cmd>CodeCompanionChat<CR>", { desc = "CodeCompanion chat" })
 map("n", "<leader>cm", "<cmd>CodeCompanion /commit<CR>", { desc = "CodeCompanion commit message" })
 map("v", "<leader>ca", "<cmd>CodeCompanionActions<CR>", { desc = "CodeCompanion actions" })
@@ -549,7 +795,8 @@ end)
 
 map("n", "<C-b>c", open_new_terminal_tab, { desc = "Open terminal tab" })
 map("n", "<C-b>v", open_terminal_vsplit_and_return_focus, { desc = "Open terminal vsplit (keep focus)" })
-map("n", "<leader>r", toggle_terminal_vsplit_and_return_focus, { desc = "Toggle terminal vsplit" })
+map("n", "<leader>r", toggle_terminal_split_and_return_focus, { desc = "Toggle terminal split (15%)" })
+map("n", "<leader>rv", toggle_terminal_vsplit_and_return_focus, { desc = "Toggle terminal vsplit" })
 map("v", "<leader>r", run_visual_selection_in_terminal, { desc = "Run selection in terminal" })
 
 -- Python tools (prefer Poetry when available)
