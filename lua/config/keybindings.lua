@@ -304,63 +304,74 @@ local function open_new_terminal_tab()
   vim.cmd("startinsert")
 end
 
-local function terminal_kind(win)
-  local ok, kind = pcall(vim.api.nvim_win_get_var, win, "cc_terminal_kind")
+local shared_terminal_bufnr = nil
+
+local function shared_terminal_layout(win)
+  local ok, layout = pcall(vim.api.nvim_win_get_var, win, "cc_terminal_layout")
   if ok then
-    return kind
+    return layout
   end
   return nil
 end
 
-local function find_terminal_window_by_kind(kind)
+local function find_shared_terminal_window()
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     local buf = vim.api.nvim_win_get_buf(win)
-    if vim.bo[buf].buftype == "terminal" and terminal_kind(win) == kind then
+    local ok, is_shared = pcall(vim.api.nvim_win_get_var, win, "cc_shared_terminal")
+    if vim.bo[buf].buftype == "terminal" and ok and is_shared then
       return win
     end
   end
   return nil
 end
 
-local function open_terminal_split_and_return_focus()
+local function open_or_toggle_shared_terminal(layout)
   local origin_win = vim.api.nvim_get_current_win()
-  local height = math.max(3, math.floor(vim.o.lines * 0.15))
-  vim.cmd("botright " .. tostring(height) .. "split")
-  vim.cmd("terminal")
+
+  local existing_win = find_shared_terminal_window()
+  if existing_win and vim.api.nvim_win_is_valid(existing_win) then
+    local existing_layout = shared_terminal_layout(existing_win)
+    if existing_layout == layout then
+      vim.api.nvim_win_close(existing_win, true)
+      return
+    end
+    vim.api.nvim_win_close(existing_win, true)
+  end
+
+  if layout == "split" then
+    local height = math.max(3, math.floor(vim.o.lines * 0.15))
+    vim.cmd("botright " .. tostring(height) .. "split")
+  else
+    vim.cmd("botright vsplit")
+  end
+
   local term_win = vim.api.nvim_get_current_win()
-  pcall(vim.api.nvim_win_set_var, term_win, "cc_terminal_kind", "split")
+  if shared_terminal_bufnr and vim.api.nvim_buf_is_valid(shared_terminal_bufnr) then
+    vim.api.nvim_win_set_buf(term_win, shared_terminal_bufnr)
+  else
+    vim.cmd("terminal")
+    shared_terminal_bufnr = vim.api.nvim_get_current_buf()
+    vim.bo[shared_terminal_bufnr].bufhidden = "hide"
+  end
+
+  pcall(vim.api.nvim_win_set_var, term_win, "cc_shared_terminal", true)
+  pcall(vim.api.nvim_win_set_var, term_win, "cc_terminal_layout", layout)
+
   if origin_win and vim.api.nvim_win_is_valid(origin_win) then
     vim.api.nvim_set_current_win(origin_win)
   end
 end
 
 local function open_terminal_vsplit_and_return_focus()
-  local origin_win = vim.api.nvim_get_current_win()
-  vim.cmd("botright vsplit")
-  vim.cmd("terminal")
-  local term_win = vim.api.nvim_get_current_win()
-  pcall(vim.api.nvim_win_set_var, term_win, "cc_terminal_kind", "vsplit")
-  if origin_win and vim.api.nvim_win_is_valid(origin_win) then
-    vim.api.nvim_set_current_win(origin_win)
-  end
+  open_or_toggle_shared_terminal("vsplit")
 end
 
 local function toggle_terminal_split_and_return_focus()
-  local win = find_terminal_window_by_kind("split")
-  if win and vim.api.nvim_win_is_valid(win) then
-    vim.api.nvim_win_close(win, true)
-    return
-  end
-  open_terminal_split_and_return_focus()
+  open_or_toggle_shared_terminal("split")
 end
 
 local function toggle_terminal_vsplit_and_return_focus()
-  local win = find_terminal_window_by_kind("vsplit")
-  if win and vim.api.nvim_win_is_valid(win) then
-    vim.api.nvim_win_close(win, true)
-    return
-  end
-  open_terminal_vsplit_and_return_focus()
+  open_or_toggle_shared_terminal("vsplit")
 end
 
 local function job_running(job_id)
