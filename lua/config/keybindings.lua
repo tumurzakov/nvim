@@ -767,11 +767,26 @@ local function reload_nvim_config()
   end)
 end
 
+local function telescope_call(picker)
+  return function()
+    local ok, builtin = pcall(require, "telescope.builtin")
+    if not ok then
+      vim.notify("Telescope is not available", vim.log.levels.ERROR)
+      return
+    end
+    builtin[picker]()
+  end
+end
+
 -- Core keybindings
 map("n", "<leader>e", "<cmd>Ex<CR>", { desc = "File explorer" })
 map("i", "jk", "<Esc>", { desc = "Leave insert mode" })
 map("n", "<leader>tt", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle tree" })
 map("n", "<F9>", "<cmd>AerialToggle!<CR>", { desc = "Toggle aerial" })
+map("n", "<leader>ff", telescope_call("find_files"), { desc = "Find files (Telescope)" })
+map("n", "<leader>fg", telescope_call("live_grep"), { desc = "Live grep (Telescope)" })
+map("n", "<leader>fb", telescope_call("buffers"), { desc = "Buffers (Telescope)" })
+map("n", "<leader>fh", telescope_call("help_tags"), { desc = "Help tags (Telescope)" })
 
 -- CodeCompanion
 map({ "n", "v" }, "<C-l>", open_codecompanion_chat_with_selection, { desc = "CodeCompanion chat with selection" })
