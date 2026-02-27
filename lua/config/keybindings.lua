@@ -61,8 +61,8 @@ local function open_codecompanion_chat_with_selection()
 end
 
 local function rewrite_visual_selection_with_codecompanion()
-  local mode = vim.fn.mode()
-  if not mode:match("[vV\22]") then
+  local visual_mode = vim.fn.mode()
+  if not visual_mode:match("[vV\22]") then
     vim.notify("Use this mapping in visual mode", vim.log.levels.WARN)
     return
   end
@@ -88,7 +88,7 @@ local function rewrite_visual_selection_with_codecompanion()
     return
   end
 
-  local function open_inline_status_window()
+  local function open_status_window()
     local ui = {}
     ui.bufnr = vim.api.nvim_create_buf(false, true)
     if not ui.bufnr then
@@ -174,57 +174,15 @@ local function rewrite_visual_selection_with_codecompanion()
     return ui
   end
 
-  local status_ui = open_inline_status_window()
-  local inline_finished = false
-  local augroup = vim.api.nvim_create_augroup("cc_inline_rewrite_status_" .. tostring(vim.uv.hrtime()), { clear = true })
-
-  vim.api.nvim_create_autocmd("User", {
-    group = augroup,
-    pattern = "CodeCompanionRequestStarted",
-    callback = function(ev)
-      if ev.data and ev.data.interaction == "inline" and status_ui then
-        status_ui.set_phase("Sending request to model...")
-      end
-    end,
-  })
-
-  vim.api.nvim_create_autocmd("User", {
-    group = augroup,
-    pattern = "CodeCompanionRequestFinished",
-    callback = function(ev)
-      if ev.data and ev.data.interaction == "inline" and status_ui and not inline_finished then
-        status_ui.set_phase("Model responded. Finalizing...")
-        vim.defer_fn(function()
-          if status_ui then
-            status_ui.close()
-          end
-          pcall(vim.api.nvim_del_augroup_by_id, augroup)
-        end, 700)
-      end
-    end,
-  })
-
-  vim.api.nvim_create_autocmd("User", {
-    group = augroup,
-    pattern = "CodeCompanionInlineFinished",
-    callback = function()
-      inline_finished = true
-      if status_ui then
-        status_ui.set_phase("Applying text replacement...")
-      end
-      vim.defer_fn(function()
-        if status_ui then
-          status_ui.close()
-        end
-        pcall(vim.api.nvim_del_augroup_by_id, augroup)
-      end, 300)
-    end,
-  })
-
+  local status_ui = open_status_window()
+  local target_bufnr = vim.api.nvim_get_current_buf()
+  local context = context_utils.get(target_bufnr, { range = 2 })
   leave_visual_mode()
 
   local prompt_lines = {
     "Rewrite ONLY the selected text and replace selection with result.",
+    "You may shorten, expand, or restructure the selected text, including adding/removing lines.",
+    "Do not modify any text outside the selected range.",
     "Default behavior (when no explicit command): translate to English, then improve grammar and clarity.",
     "Preserve meaning and facts unchanged.",
     "Never invent details, entities, numbers, or claims that are not in the selected text.",
@@ -243,8 +201,49 @@ local function rewrite_visual_selection_with_codecompanion()
   end
 
   local prompt = table.concat(prompt_lines, "\n")
+    .. "\n\nSelected text:\n```text\n"
+    .. selected
+    .. "\n```"
+  local augroup = vim.api.nvim_create_augroup("cc_inline_rewrite_status_" .. tostring(vim.uv.hrtime()), { clear = true })
+  local function close_status()
+    if status_ui then
+      status_ui.close()
+    end
+    pcall(vim.api.nvim_del_augroup_by_id, augroup)
+  end
 
-  local context = context_utils.get(vim.api.nvim_get_current_buf(), { range = 2 })
+  vim.api.nvim_create_autocmd("User", {
+    group = augroup,
+    pattern = "CodeCompanionRequestStarted",
+    callback = function(ev)
+      if ev.data and ev.data.interaction == "inline" and status_ui then
+        status_ui.set_phase("Sending request to model...")
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("User", {
+    group = augroup,
+    pattern = "CodeCompanionRequestFinished",
+    callback = function(ev)
+      if ev.data and ev.data.interaction == "inline" and status_ui then
+        status_ui.set_phase("Patch generated. Confirm with gda / gdr...")
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("User", {
+    group = augroup,
+    pattern = "CodeCompanionInlineFinished",
+    callback = function()
+      close_status()
+    end,
+  })
+
+  if status_ui then
+    status_ui.set_phase("Waiting for model...")
+  end
+
   local inline = inline_mod.new({
     buffer_context = context,
     opts = { placement = "replace" },
@@ -260,9 +259,6 @@ local function rewrite_visual_selection_with_codecompanion()
     return
   end
 
-  if status_ui then
-    status_ui.set_phase("Waiting for model...")
-  end
   inline:prompt(prompt)
 end
 
@@ -838,8 +834,8 @@ vim.api.nvim_create_user_command("ReloadConfig", reload_nvim_config, {
   desc = "Reload Neovim config and Lazy specs",
 })
 
--- Local (git-ignored) key overrides: lua/config/keybindings_local.lua
-local ok_local, local_keybindings = pcall(require, "config.keybindings_local")
-if ok_local and type(local_keybindings.apply) == "function" then
-  local_keybindings.apply(map)
+-- Local (git-ignored) settings overrides: lua/config/settings_local.lua
+local ok_local, settings_local = pcall(require, "config.settings_local")
+if ok_local and settings_local.keybindings and type(settings_local.keybindings.apply) == "function" then
+  settings_local.keybindings.apply(map)
 end
