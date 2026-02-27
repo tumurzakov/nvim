@@ -39,11 +39,12 @@ end
 local function open_codecompanion_chat_with_selection()
   local mode = vim.fn.mode()
   local has_selection = mode:match("[vV\22]") ~= nil
-  local selection = has_selection and get_visual_selection_from_marks() or nil
 
   if has_selection then
     leave_visual_mode()
   end
+
+  local selection = has_selection and get_visual_selection_from_marks() or nil
 
   local cc = require("codecompanion")
   local chat = cc.chat({

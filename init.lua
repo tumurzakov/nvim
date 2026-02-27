@@ -15,3 +15,6 @@ require("config.keybindings")
 
 -- Load all plugin specs from lua/plugins/*
 require("lazy").setup("plugins")
+
+-- Startup cheatsheet (shown when no files given)
+require("config.help").setup()

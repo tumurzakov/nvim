@@ -6,9 +6,9 @@ local cc = ok and (secrets.codecompanion or {}) or {}
 
 -- Strategies config
 local STRATEGIES_CFG = vim.tbl_deep_extend("force", {
-  cmd = { adapter = "codex" },
-  chat = { adapter = "codex" },
-  inline = { adapter = "codex" },
+  cmd = { adapter = "claude_code" },
+  chat = { adapter = "claude_code" },
+  inline = { adapter = "claude_code" },
 }, cc.strategies or {})
 
 local function compact_env(env)
@@ -197,7 +197,15 @@ Formatting rule:
           })
         end,
         claude_code = function()
+          local commands = nil
+          if vim.fn.has("win32") == 1 then
+            commands = {
+              default = { "cmd", "/c", "claude-code-acp" },
+              yolo = { "cmd", "/c", "claude-code-acp", "--yolo" },
+            }
+          end
           return require("codecompanion.adapters").extend("claude_code", {
+            commands = commands,
             env = compact_env({
               CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_CODE_OAUTH_TOKEN,
             }),
