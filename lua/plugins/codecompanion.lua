@@ -197,15 +197,7 @@ Formatting rule:
           })
         end,
         claude_code = function()
-          local commands = nil
-          if vim.fn.has("win32") == 1 then
-            commands = {
-              default = { "cmd", "/c", "claude-code-acp" },
-              yolo = { "cmd", "/c", "claude-code-acp", "--yolo" },
-            }
-          end
           return require("codecompanion.adapters").extend("claude_code", {
-            commands = commands,
             env = compact_env({
               CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_CODE_OAUTH_TOKEN,
             }),
