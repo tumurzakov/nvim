@@ -80,14 +80,23 @@ local function rewrite_visual_selection_with_codecompanion()
     end
   end
 
-  local ok_context, context_utils = pcall(require, "codecompanion.utils.context")
-  local ok_inline, inline_mod = pcall(require, "codecompanion.interactions.inline")
-  if not (ok_context and ok_inline) then
-    vim.notify("CodeCompanion inline is not available", vim.log.levels.ERROR)
+  local ok_cc, codecompanion = pcall(require, "codecompanion")
+  local ok_cc_config, cc_config = pcall(require, "codecompanion.config")
+  local ok_adapters, adapters_mod = pcall(require, "codecompanion.adapters")
+  if not ok_cc then
+    vim.notify("CodeCompanion is not available", vim.log.levels.ERROR)
+    return
+  end
+  if not ok_cc_config then
+    vim.notify("CodeCompanion config module is not available", vim.log.levels.ERROR)
+    return
+  end
+  if not ok_adapters then
+    vim.notify("CodeCompanion adapters module is not available", vim.log.levels.ERROR)
     return
   end
 
-  local function open_inline_status_window()
+  local function open_status_window()
     local ui = {}
     ui.bufnr = vim.api.nvim_create_buf(false, true)
     if not ui.bufnr then
@@ -136,7 +145,7 @@ local function rewrite_visual_selection_with_codecompanion()
         "",
         "  " .. frame .. "  " .. ui.phase,
         "",
-        "  Running inline rewrite on selected text...",
+        "  Running ACP rewrite on selected text...",
         "",
       })
       vim.bo[ui.bufnr].modifiable = false
@@ -173,52 +182,53 @@ local function rewrite_visual_selection_with_codecompanion()
     return ui
   end
 
-  local status_ui = open_inline_status_window()
-  local inline_finished = false
-  local augroup = vim.api.nvim_create_augroup("cc_inline_rewrite_status_" .. tostring(vim.uv.hrtime()), { clear = true })
+  local status_ui = open_status_window()
+  local target_bufnr = vim.api.nvim_get_current_buf()
+  local start_pos = vim.api.nvim_buf_get_mark(0, "<")
+  local end_pos = vim.api.nvim_buf_get_mark(0, ">")
 
-  vim.api.nvim_create_autocmd("User", {
-    group = augroup,
-    pattern = "CodeCompanionRequestStarted",
-    callback = function(ev)
-      if ev.data and ev.data.interaction == "inline" and status_ui then
-        status_ui.set_phase("Sending request to model...")
-      end
-    end,
-  })
+  local function replace_saved_selection(new_text)
+    if not vim.api.nvim_buf_is_valid(target_bufnr) then
+      return false
+    end
 
-  vim.api.nvim_create_autocmd("User", {
-    group = augroup,
-    pattern = "CodeCompanionRequestFinished",
-    callback = function(ev)
-      if ev.data and ev.data.interaction == "inline" and status_ui and not inline_finished then
-        status_ui.set_phase("Model responded. Finalizing...")
-        vim.defer_fn(function()
-          if status_ui then
-            status_ui.close()
-          end
-          pcall(vim.api.nvim_del_augroup_by_id, augroup)
-        end, 700)
-      end
-    end,
-  })
+    local start_line, start_col = start_pos[1], start_pos[2]
+    local end_line, end_col = end_pos[1], end_pos[2]
+    if start_line > end_line or (start_line == end_line and start_col > end_col) then
+      start_line, end_line = end_line, start_line
+      start_col, end_col = end_col, start_col
+    end
 
-  vim.api.nvim_create_autocmd("User", {
-    group = augroup,
-    pattern = "CodeCompanionInlineFinished",
-    callback = function()
-      inline_finished = true
-      if status_ui then
-        status_ui.set_phase("Applying text replacement...")
-      end
-      vim.defer_fn(function()
-        if status_ui then
-          status_ui.close()
-        end
-        pcall(vim.api.nvim_del_augroup_by_id, augroup)
-      end, 300)
-    end,
-  })
+    local end_line_text = vim.api.nvim_buf_get_lines(target_bufnr, end_line - 1, end_line, true)[1] or ""
+    local end_exclusive_col
+
+    if mode:match("V") then
+      start_col = 0
+      end_exclusive_col = #end_line_text
+    else
+      -- Visual marks are inclusive; nvim_buf_set_text expects exclusive end col.
+      end_exclusive_col = math.min(end_col + 1, #end_line_text)
+    end
+
+    local replacement = vim.split(new_text or "", "\n", { plain = true })
+    if vim.tbl_isempty(replacement) then
+      replacement = { "" }
+    end
+
+    local ok, err = pcall(
+      vim.api.nvim_buf_set_text,
+      target_bufnr,
+      start_line - 1,
+      start_col,
+      end_line - 1,
+      end_exclusive_col,
+      replacement
+    )
+    if not ok and err then
+      vim.notify("Selection replace failed: " .. tostring(err), vim.log.levels.ERROR)
+    end
+    return ok
+  end
 
   leave_visual_mode()
 
@@ -242,27 +252,105 @@ local function rewrite_visual_selection_with_codecompanion()
   end
 
   local prompt = table.concat(prompt_lines, "\n")
+    .. "\n\nSelected text:\n```text\n"
+    .. selected
+    .. "\n```"
 
-  local context = context_utils.get(vim.api.nvim_get_current_buf(), { range = 2 })
-  local inline = inline_mod.new({
-    buffer_context = context,
-    opts = { placement = "replace" },
-    placement = "replace",
-  })
-
-  if not inline then
+  local configured_inline_adapter = cc_config.strategies
+    and cc_config.strategies.inline
+    and cc_config.strategies.inline.adapter
+    or "codex"
+  local ok_resolve_adapter, adapter = pcall(adapters_mod.resolve, configured_inline_adapter)
+  if not ok_resolve_adapter or not adapter then
     if status_ui then
       status_ui.close()
     end
-    pcall(vim.api.nvim_del_augroup_by_id, augroup)
-    vim.notify("Failed to start CodeCompanion inline", vim.log.levels.ERROR)
+    vim.notify(
+      string.format("Failed to resolve CodeCompanion adapter '%s' for /ci", configured_inline_adapter),
+      vim.log.levels.ERROR
+    )
     return
   end
 
+  local completed = false
   if status_ui then
-    status_ui.set_phase("Waiting for model...")
+    status_ui.set_phase("Sending request to " .. adapter.name .. "...")
   end
-  inline:prompt(prompt)
+
+  local chat = codecompanion.chat({
+    auto_submit = true,
+    params = { adapter = adapter.name },
+    messages = {
+      { role = cc_config.constants.USER_ROLE, content = prompt },
+    },
+    callbacks = {
+      on_created = function(c)
+        if c and c.ui and c.ui.hide then
+          pcall(function()
+            c.ui:hide()
+          end)
+        end
+      end,
+      on_submitted = function()
+        if status_ui then
+          status_ui.set_phase("Waiting for " .. adapter.name .. "...")
+        end
+      end,
+      on_completed = function(c)
+        if completed then
+          return
+        end
+        completed = true
+
+        local rewritten
+        for i = #c.messages, 1, -1 do
+          local msg = c.messages[i]
+          if msg and msg.role == cc_config.constants.LLM_ROLE and type(msg.content) == "string" then
+            local content = vim.trim(msg.content)
+            if content ~= "" then
+              rewritten = content
+              break
+            end
+          end
+        end
+
+        if status_ui then
+          status_ui.set_phase("Applying text replacement...")
+        end
+
+        if rewritten then
+          rewritten = rewritten:gsub("^```[%w_-]*\n", ""):gsub("\n```$", "")
+          if not replace_saved_selection(rewritten) then
+            vim.notify("Failed to apply rewritten text to the original selection", vim.log.levels.ERROR)
+          end
+        else
+          vim.notify(adapter.name .. " returned no rewritten text", vim.log.levels.ERROR)
+        end
+
+        if status_ui then
+          status_ui.close()
+        end
+        pcall(function()
+          c:close()
+        end)
+      end,
+      on_cancelled = function(c)
+        if status_ui then
+          status_ui.close()
+        end
+        pcall(function()
+          c:close()
+        end)
+      end,
+    },
+  })
+
+  if not chat then
+    if status_ui then
+      status_ui.close()
+    end
+    vim.notify("Failed to start CodeCompanion chat for adapter " .. adapter.name, vim.log.levels.ERROR)
+  end
 end
 
 local function open_diagnostics_float()
