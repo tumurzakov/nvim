@@ -1,4 +1,3 @@
 # Ignore local secrets (real credentials)
-lua/secrets.lua
+lua/config/settings_local.lua
 .nvimlog
-lua/config/keybindings_local.lua
