@@ -10,6 +10,11 @@ vim.o.shiftwidth = 4
 vim.o.expandtab = true
 vim.o.termguicolors = true
 
+-- Folding via LSP
+vim.o.foldmethod = "expr"
+vim.o.foldexpr = "v:lua.vim.lsp.foldexpr()"
+vim.o.foldlevel = 99
+
 -- nvim-tree: disable netrw to avoid conflicts
 vim.g.loaded_netrw = 1
 vim.g.loaded_netrwPlugin = 1

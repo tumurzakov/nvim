@@ -13,7 +13,7 @@ return {
 
     -- Needed by CodeCompanion markdown prompt library parser.
     pcall(function()
-      ts.install({ "lua", "python", "yaml", "markdown", "markdown_inline", "vim", "vimdoc", "query" })
+      ts.install({ "lua", "python", "yaml", "json", "markdown", "markdown_inline", "vim", "vimdoc", "query" })
     end)
   end,
 }

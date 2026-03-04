@@ -13,7 +13,7 @@ return {
     -- Mason setup
     require("mason").setup()
     require("mason-lspconfig").setup({
-      ensure_installed = { "pyright", "ruff", "gopls" },
+      ensure_installed = { "pyright", "ruff", "gopls", "jsonls" },
       automatic_installation = true,
     })
 
@@ -75,7 +75,21 @@ return {
       on_attach = on_attach,
     })
 
-    vim.lsp.enable({ "pyright", "ruff", "gopls" })
+    vim.lsp.config("jsonls", {
+      cmd = resolve_cmd("vscode-json-language-server", { "--stdio" }),
+      filetypes = { "json", "jsonc" },
+      capabilities = vim.tbl_deep_extend("force", capabilities, {
+        textDocument = {
+          foldingRange = {
+            dynamicRegistration = false,
+            lineFoldingOnly = true,
+          },
+        },
+      }),
+      on_attach = on_attach,
+    })
+
+    vim.lsp.enable({ "pyright", "ruff", "gopls", "jsonls" })
     vim.api.nvim_create_autocmd("VimEnter", {
       group = vim.api.nvim_create_augroup("user.lsp.bootstrap", { clear = true }),
       once = true,
