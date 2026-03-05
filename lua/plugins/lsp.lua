@@ -39,7 +39,9 @@ return {
     end
 
     vim.lsp.config("pyright", {
-      cmd = { cfg_dir .. "/bin/pyright-langserver-wrapper" },
+      cmd = vim.fn.has("win32") == 1
+        and { "bash", cfg_dir .. "/bin/pyright-langserver-wrapper" }
+        or { cfg_dir .. "/bin/pyright-langserver-wrapper" },
       capabilities = capabilities,
       on_attach = on_attach,
       root_markers = {

@@ -1,5 +1,14 @@
 #!/bin/sh
 
+# Windows (MSYS/Git Bash): Mason only creates .cmd wrappers in its bin/,
+# but node_modules/.bin/ has bash-compatible scripts.
+if [ -n "$LOCALAPPDATA" ] && command -v cygpath >/dev/null 2>&1; then
+  mason_pyright="$(cygpath "$LOCALAPPDATA")/nvim-data/mason/packages/pyright/node_modules/.bin/pyright-langserver"
+  if [ -f "$mason_pyright" ]; then
+    export PATH="$(dirname "$mason_pyright"):$PATH"
+  fi
+fi
+
 if [ -f "poetry.lock" ]; then
   exec poetry run pyright-langserver --stdio
 fi

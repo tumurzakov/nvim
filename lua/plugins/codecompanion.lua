@@ -1,14 +1,14 @@
--- Load secrets safely (file is git-ignored)
-local ok, secrets = pcall(require, "secrets")
+-- Load local settings safely (file is git-ignored)
+local ok, settings_local = pcall(require, "config.settings_local")
 
 -- Centralize local, git-ignored config for models/keys/endpoints
-local cc = ok and (secrets.codecompanion or {}) or {}
+local cc = ok and (settings_local.codecompanion or {}) or {}
 
 -- Strategies config
 local STRATEGIES_CFG = vim.tbl_deep_extend("force", {
-  cmd = { adapter = "codex" },
-  chat = { adapter = "codex" },
-  inline = { adapter = "codex" },
+  cmd = { adapter = "claude_code" },
+  chat = { adapter = "claude_code" },
+  inline = { adapter = "claude_code" },
 }, cc.strategies or {})
 
 local function compact_env(env)
@@ -223,6 +223,7 @@ Formatting rule:
     end
 
     require("codecompanion").setup(opts)
+    require("config.codecompanion_chat_archive").setup()
 
     -- Alias: :CC (supports range + args) -> :CodeCompanionChat
     vim.api.nvim_create_user_command("CC", function(args)

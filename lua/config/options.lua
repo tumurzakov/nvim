@@ -15,6 +15,14 @@ vim.o.foldmethod = "expr"
 vim.o.foldexpr = "v:lua.vim.lsp.foldexpr()"
 vim.o.foldlevel = 99
 
+-- Use bash on Windows (MSYS2/Git Bash) so :terminal and chansend work correctly
+if vim.fn.has("win32") == 1 then
+  vim.o.shell = "bash"
+  vim.o.shellcmdflag = "-c"
+  vim.o.shellquote = ""
+  vim.o.shellxquote = ""
+end
+
 -- nvim-tree: disable netrw to avoid conflicts
 vim.g.loaded_netrw = 1
 vim.g.loaded_netrwPlugin = 1
