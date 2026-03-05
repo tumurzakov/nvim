@@ -19,6 +19,10 @@ local help_text = [[
  \r       Toggle split / run sel       \rx  Ruff fix
  \rv      Toggle vsplit                \x   Run file
 
+ SPEECH
+ \ss  Speak selection (visual)
+ \sq  Stop speaking
+
  EDITING          COMPLETION (insert)  COMMANDS
  jk  Leave insert C-Space Trigger      :ReloadConfig
                   Enter   Confirm      :CC  CodeCompanion

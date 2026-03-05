@@ -822,6 +822,43 @@ map("n", "<leader>r", toggle_terminal_split_and_return_focus, { desc = "Toggle t
 map("n", "<leader>rv", toggle_terminal_vsplit_and_return_focus, { desc = "Toggle terminal vsplit" })
 map("v", "<leader>r", run_visual_selection_in_terminal, { desc = "Run selection in terminal" })
 
+-- Text-to-speech (macOS `say` / Linux `espeak`)
+local tts_job_id = nil
+
+local function tts_stop()
+  if tts_job_id then
+    vim.fn.jobstop(tts_job_id)
+    tts_job_id = nil
+  end
+end
+
+local function tts_speak()
+  tts_stop()
+  local save = vim.fn.getreg("s")
+  vim.cmd('noautocmd normal! "sy')
+  local text = vim.fn.getreg("s")
+  vim.fn.setreg("s", save)
+  if not text or text == "" then
+    vim.notify("TTS: no text selected", vim.log.levels.WARN)
+    return
+  end
+  local cmd
+  if vim.fn.executable("say") == 1 then
+    cmd = { "say", text }
+  elseif vim.fn.executable("espeak") == 1 then
+    cmd = { "espeak", text }
+  else
+    vim.notify("TTS: no speech command found (need `say` or `espeak`)", vim.log.levels.ERROR)
+    return
+  end
+  tts_job_id = vim.fn.jobstart(cmd, {
+    on_exit = function() tts_job_id = nil end,
+  })
+end
+
+map("v", "<leader>ss", tts_speak, { desc = "TTS: speak selection" })
+map({ "n", "v" }, "<leader>sq", tts_stop, { desc = "TTS: stop speaking" })
+
 -- Python tools (prefer Poetry when available)
 map("n", "<leader>ta", run_pytest_all, { desc = "Pytest all" })
 map("n", "<leader>tf", run_pytest_file, { desc = "Pytest file" })
