@@ -439,30 +439,18 @@ local function get_visual_text()
   return text
 end
 
-local function run_visual_selection_in_terminal()
-  local text = get_visual_text()
-  if text == "" then
-    leave_visual_mode()
-    return
-  end
-
-  local function send_to_terminal(send)
-    local chan = ensure_terminal_channel()
-    if not chan then
-      print("Could not open terminal")
-      return false
+local function scroll_terminal_to_bottom(chan)
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.bo[buf].buftype == "terminal" then
+      local ok, job_id = pcall(vim.api.nvim_buf_get_var, buf, "terminal_job_id")
+      if ok and job_id == chan then
+        local line_count = vim.api.nvim_buf_line_count(buf)
+        pcall(vim.api.nvim_win_set_cursor, win, { line_count, 0 })
+        break
+      end
     end
-
-    local payload = send
-    if not payload:match("\n$") then
-      payload = payload .. "\n"
-    end
-    vim.fn.chansend(chan, payload)
-    return true
   end
-
-  send_to_terminal(text)
-  leave_visual_mode()
 end
 
 local function send_to_terminal(send)
@@ -478,7 +466,19 @@ local function send_to_terminal(send)
   end
 
   vim.fn.chansend(chan, payload)
+  vim.schedule(function() scroll_terminal_to_bottom(chan) end)
   return true
+end
+
+local function run_visual_selection_in_terminal()
+  local text = get_visual_text()
+  if text == "" then
+    leave_visual_mode()
+    return
+  end
+
+  send_to_terminal(text)
+  leave_visual_mode()
 end
 
 local function find_terminal_window()
@@ -775,10 +775,57 @@ local function telescope_call(picker)
   end
 end
 
+-- Toggle zoom current split
+local function toggle_zoom()
+  if vim.t.zoomed then
+    vim.cmd(vim.t.zoom_restore)
+    vim.t.zoomed = false
+  else
+    vim.t.zoom_restore = vim.fn.winrestcmd()
+    vim.cmd("wincmd _")
+    vim.cmd("wincmd |")
+    vim.t.zoomed = true
+  end
+end
+
+-- Toggle focus between NvimTree and source window
+local last_source_win = nil
+local function toggle_nvimtree_focus()
+  local nvimtree_api_ok, nvimtree_api = pcall(require, "nvim-tree.api")
+  if not nvimtree_api_ok then
+    return
+  end
+
+  local cur_win = vim.api.nvim_get_current_win()
+  local cur_buf = vim.api.nvim_win_get_buf(cur_win)
+  local is_tree = vim.bo[cur_buf].filetype == "NvimTree"
+
+  if is_tree then
+    -- Go back to source window
+    if last_source_win and vim.api.nvim_win_is_valid(last_source_win) then
+      vim.api.nvim_set_current_win(last_source_win)
+    else
+      vim.cmd("wincmd l")
+    end
+  else
+    -- Remember source window, then focus tree (open if needed)
+    last_source_win = cur_win
+    local tree_visible = nvimtree_api.tree.is_visible()
+    if tree_visible then
+      nvimtree_api.tree.focus()
+    else
+      nvimtree_api.tree.open()
+    end
+  end
+end
+
 -- Core keybindings
 map("n", "<leader>e", "<cmd>Ex<CR>", { desc = "File explorer" })
 map("i", "jk", "<Esc>", { desc = "Leave insert mode" })
 map("n", "<leader>tt", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle tree" })
+map("n", "±", toggle_nvimtree_focus, { desc = "Toggle NvimTree focus" })
+map("n", "~", toggle_nvimtree_focus, { desc = "Toggle NvimTree focus" })
+map("n", "<F3>", toggle_zoom, { desc = "Toggle zoom split" })
 map("n", "<F9>", "<cmd>AerialToggle!<CR>", { desc = "Toggle aerial" })
 map("n", "<leader>ff", telescope_call("find_files"), { desc = "Find files (Telescope)" })
 map("n", "<leader>fg", telescope_call("live_grep"), { desc = "Live grep (Telescope)" })
@@ -818,9 +865,17 @@ end)
 
 map("n", "<C-b>c", open_new_terminal_tab, { desc = "Open terminal tab" })
 map("n", "<C-b>v", open_terminal_vsplit_and_return_focus, { desc = "Open terminal vsplit (keep focus)" })
-map("n", "<leader>r", toggle_terminal_split_and_return_focus, { desc = "Toggle terminal split (15%)" })
+map("n", "<leader>rt", toggle_terminal_split_and_return_focus, { desc = "Toggle terminal split (15%)" })
 map("n", "<leader>rv", toggle_terminal_vsplit_and_return_focus, { desc = "Toggle terminal vsplit" })
 map("v", "<leader>r", run_visual_selection_in_terminal, { desc = "Run selection in terminal" })
+map("n", "<leader>rl", function()
+  local line = vim.trim(vim.api.nvim_get_current_line())
+  if line == "" then
+    print("Empty line")
+    return
+  end
+  send_to_terminal(line)
+end, { desc = "Run current line in terminal" })
 
 -- Text-to-speech (macOS `say` / Linux `espeak`)
 local tts_job_id = nil
@@ -858,6 +913,116 @@ end
 
 map("v", "<leader>ss", tts_speak, { desc = "TTS: speak selection" })
 map({ "n", "v" }, "<leader>sq", tts_stop, { desc = "TTS: stop speaking" })
+
+-- Web page summarizer
+local function web_summarize(url, guidance, insert_after, indent)
+  local bufnr = vim.api.nvim_get_current_buf()
+  local row = insert_after or vim.api.nvim_win_get_cursor(0)[1]
+  indent = indent or ""
+  vim.notify("Summarizing " .. url .. "...")
+
+  local cmd = { "python3", vim.fn.expand("~/src/context/web_summary.py"), url }
+  if guidance and guidance ~= "" then
+    table.insert(cmd, guidance)
+  end
+
+  local stdout_lines = {}
+  vim.fn.jobstart(cmd, {
+    stdout_buffered = true,
+    on_stdout = function(_, data)
+      if data then
+        for _, line in ipairs(data) do
+          if line ~= "" or #stdout_lines > 0 then
+            table.insert(stdout_lines, line)
+          end
+        end
+      end
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        -- trim trailing empty lines
+        while #stdout_lines > 0 and stdout_lines[#stdout_lines] == "" do
+          table.remove(stdout_lines)
+        end
+        if code ~= 0 or #stdout_lines == 0 then
+          vim.notify("Web summary failed (exit " .. code .. ")", vim.log.levels.ERROR)
+          return
+        end
+        if indent ~= "" then
+          for i, line in ipairs(stdout_lines) do
+            stdout_lines[i] = indent .. line
+          end
+        end
+        vim.api.nvim_buf_set_lines(bufnr, row, row, false, stdout_lines)
+        vim.notify("Web summary inserted (" .. #stdout_lines .. " lines)")
+      end)
+    end,
+  })
+end
+
+local function web_summarize_action()
+  local mode = vim.fn.mode()
+  local url
+
+  local guidance
+  local insert_after
+  local indent = ""
+
+  -- Visual mode: selection = guidance lines + URL on first or last line
+  if mode:match("[vV\22]") then
+    local text = get_visual_text()
+    leave_visual_mode()
+    insert_after = vim.api.nvim_buf_get_mark(0, ">")[1]
+    local sel_start = vim.api.nvim_buf_get_mark(0, "<")[1]
+    local sel_end = insert_after
+    local buf_lines = vim.api.nvim_buf_get_lines(0, sel_start - 1, sel_end, false)
+    local lines = vim.split(vim.trim(text), "\n")
+
+    -- check last line for URL first, then first line
+    local url_line_idx
+    for _, idx in ipairs({ #lines, 1 }) do
+      if lines[idx] and lines[idx]:match("https?://.*$") then
+        url_line_idx = idx
+        break
+      end
+    end
+
+    if url_line_idx then
+      -- detect indent from the actual buffer line containing the URL
+      local raw_url_line = buf_lines[url_line_idx] or ""
+      indent = raw_url_line:match("^(%s*)") or ""
+
+      url = lines[url_line_idx]:match("https?://.*$")
+      table.remove(lines, url_line_idx)
+      local g = vim.trim(table.concat(lines, "\n"))
+      if g ~= "" then
+        guidance = g
+      end
+    end
+  end
+
+  -- Try extracting URL from current line
+  if not url or url == "" then
+    local line = vim.api.nvim_get_current_line()
+    url = line:match("https?://.*$")
+    if url then
+      indent = line:match("^(%s*)") or ""
+    end
+  end
+
+  -- Prompt for URL
+  if not url or url == "" then
+    url = vim.fn.input("URL: ")
+    if url == "" then
+      return
+    end
+    indent = vim.api.nvim_get_current_line():match("^(%s*)") or ""
+  end
+
+  web_summarize(url, guidance, insert_after, indent)
+end
+
+map({ "n", "v" }, "<leader>ws", web_summarize_action, { desc = "Summarize web page" })
 
 -- Python tools (prefer Poetry when available)
 map("n", "<leader>ta", run_pytest_all, { desc = "Pytest all" })
