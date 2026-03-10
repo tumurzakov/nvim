@@ -53,6 +53,33 @@ return {
         "Pipfile",
         ".git"
       },
+      on_init = function(client)
+        local root = client.root_dir
+        if not root then return end
+
+        -- Resolve Poetry virtualenv and tell pyright the exact pythonPath
+        local poetry_lock = root .. "/poetry.lock"
+        if not vim.uv.fs_stat(poetry_lock) then return end
+
+        local result = vim.system(
+          { "poetry", "env", "info", "-p" },
+          { cwd = root, text = true }
+        ):wait()
+        if result.code ~= 0 then return end
+
+        local venv = vim.trim(result.stdout)
+        if venv == "" or not vim.uv.fs_stat(venv) then return end
+
+        local python = venv .. "/bin/python"
+        if vim.fn.has("win32") == 1 then
+          python = venv .. "/Scripts/python.exe"
+        end
+
+        client.settings = vim.tbl_deep_extend("force", client.settings or {}, {
+          python = { pythonPath = python },
+        })
+        client:notify("workspace/didChangeConfiguration", { settings = client.settings })
+      end,
       settings = {
         python = {
           analysis = {

@@ -1,5 +1,11 @@
 #!/bin/sh
 
+# Add Mason bin to PATH
+_mason_bin="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/mason/bin"
+if [ -d "$_mason_bin" ]; then
+  export PATH="$_mason_bin:$PATH"
+fi
+
 # Windows (MSYS/Git Bash): Mason only creates .cmd wrappers in its bin/,
 # but node_modules/.bin/ has bash-compatible scripts.
 if [ -n "$LOCALAPPDATA" ] && command -v cygpath >/dev/null 2>&1; then
@@ -9,8 +15,18 @@ if [ -n "$LOCALAPPDATA" ] && command -v cygpath >/dev/null 2>&1; then
   fi
 fi
 
-if [ -f "poetry.lock" ]; then
-  exec poetry run pyright-langserver --stdio
-fi
+# Find poetry.lock by walking up from cwd and set VIRTUAL_ENV for pyright
+_dir="$PWD"
+while [ "$_dir" != "/" ]; do
+  if [ -f "$_dir/poetry.lock" ] && command -v poetry >/dev/null 2>&1; then
+    _venv="$(cd "$_dir" && poetry env info -p 2>/dev/null)"
+    if [ -n "$_venv" ] && [ -d "$_venv" ]; then
+      export VIRTUAL_ENV="$_venv"
+      export PATH="$_venv/bin:$PATH"
+      break
+    fi
+  fi
+  _dir="$(dirname "$_dir")"
+done
 
 exec pyright-langserver --stdio
