@@ -4,8 +4,8 @@ local ok, settings_local = pcall(require, "config.settings_local")
 -- Centralize local, git-ignored config for models/keys/endpoints
 local cc = ok and (settings_local.codecompanion or {}) or {}
 
--- Strategies config
-local STRATEGIES_CFG = vim.tbl_deep_extend("force", {
+-- Interactions config (adapters per interaction type)
+local INTERACTIONS_CFG = vim.tbl_deep_extend("force", {
   cmd = { adapter = "claude_code" },
   chat = { adapter = "claude_code" },
   inline = { adapter = "claude_code" },
@@ -47,7 +47,7 @@ local GEMINI_API_KEY = GEMINI_CFG.api_key
 local GEMINI_BIN = GEMINI_CFG.command or exepath_or("gemini")
 
 local CLAUDE_MODEL = CLAUDE_CFG.model
-local CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_CFG.api_key or os.getenv("CLAUDE_CODE_OAUTH_TOKEN=")
+local CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_CFG.api_key or os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
 
 -- Ollama local config
 local OLLAMA_CFG = cc.ollama or {}
@@ -75,10 +75,18 @@ return {
   opts = {
     log_level = "debug",
     ignore_warnings = true,
-    interactions = {
+    interactions = vim.tbl_deep_extend("force", INTERACTIONS_CFG, {
       chat = {
         opts = {
           system_prompt = function(ctx)
+            local agents_md = vim.fs.joinpath(vim.fn.stdpath("config"), "AGENTS.md")
+            local global_rules = ""
+            local f = io.open(agents_md, "r")
+            if f then
+              global_rules = f:read("*a")
+              f:close()
+            end
+
             return ctx.default_system_prompt
               .. string.format(
                 [[Additional context:
@@ -92,29 +100,87 @@ The user is working on a %s machine. Please respond with system specific command
                 ctx.nvim_version,
                 ctx.os
               )
-              .. [[
-Formatting rule:
-- Never use markdown tables in responses.
-- Use plain bullets or short paragraphs instead.
-]]
+              .. "\n" .. global_rules
           end,
         },
-      },
-    },
-    rules = {
-      NoTables = {
-        description = "Force plain-text formatting without markdown tables",
-        parser = "codecompanion",
-        files = {
-          vim.fs.joinpath(vim.fn.stdpath("config"), "codecompanion_rules", "no_tables.md"),
+        slash_commands = {
+          ["chats"] = {
+            callback = "slash_commands.chats",
+            description = "Load a saved chat from .chats/",
+            opts = {
+              contains_code = false,
+              provider = "telescope",
+            },
+          },
+        },
+        tools = {
+          ["agenda"] = {
+            callback = "tools.build_agenda",
+            description = "Fetch all context sources (emails, Teams, web) and return raw data for building a daily agenda",
+            opts = {
+              require_approval_before = false,
+            },
+          },
+          ["email_fetch"] = {
+            callback = "tools.email_fetch",
+            description = "Fetch emails from Mail.app for a given date",
+            opts = {
+              require_approval_before = false,
+            },
+          },
+          ["teams_activity"] = {
+            callback = "tools.teams_activity",
+            description = "Fetch Teams activity feed",
+            opts = {
+              require_approval_before = false,
+            },
+          },
+          ["teams_calendar"] = {
+            callback = "tools.teams_calendar",
+            description = "Fetch Teams calendar month view",
+            opts = {
+              require_approval_before = false,
+            },
+          },
+          ["teams_chats"] = {
+            callback = "tools.teams_chats",
+            description = "Fetch recent Teams chats with messages",
+            opts = {
+              require_approval_before = false,
+            },
+          },
+        },
+        keymaps = {
+          next_chat = {
+            modes = { n = "}" },
+            index = 11,
+            callback = function(chat)
+              require("config.codecompanion_chat_archive").next_chat.callback(chat)
+            end,
+            description = "[Nav] Next chat (loads saved)",
+          },
+          previous_chat = {
+            modes = { n = "{" },
+            index = 12,
+            callback = function(chat)
+              require("config.codecompanion_chat_archive").previous_chat.callback(chat)
+            end,
+            description = "[Nav] Previous chat (loads saved)",
+          },
         },
       },
-      opts = {
-        chat = {
-          autoload = { "default", "NoTables" },
+    }),
+    extensions = {
+      mcphub = {
+        callback = "mcphub.extensions.codecompanion",
+        opts = {
+          make_vars = true,
+          make_slash_commands = true,
+          show_result_in_chat = true,
         },
       },
     },
+    rules = {},
     display = {
       chat = {
         window = {
@@ -198,6 +264,21 @@ Formatting rule:
         end,
         claude_code = function()
           return require("codecompanion.adapters").extend("claude_code", {
+            commands = {
+              default = { vim.fn.expand("~/.local/bin/claude-code-acp") },
+              yolo = { vim.fn.expand("~/.local/bin/claude-code-acp"), "--yolo" },
+            },
+            defaults = {
+              timeout = 120000, -- 2 minutes for slow responses
+              mcpServers = {
+                {
+                  name = "context-tools",
+                  command = "python3",
+                  args = { os.getenv("HOME") .. "/sources/context/src/mcp_server.py" },
+                  env = {},
+                },
+              },
+            },
             env = compact_env({
               CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_CODE_OAUTH_TOKEN,
             }),
@@ -205,7 +286,7 @@ Formatting rule:
         end,
       },
     },
-    strategies = STRATEGIES_CFG,
+    -- strategies removed: merged into interactions above
   },
   config = function(_, opts)
     if opts.adapters then

@@ -6,27 +6,31 @@ local help_text = [[
  FILES            LSP                  AI (CodeCompanion)
  \e   Explorer    gd  Definition       C-l  Chat / paste sel
  \tt  NvimTree    gr  References       C-k  Explain (hover)
- \ff  Find files  gi  Implementation   \ci  Rewrite (visual)
- \fg  Live grep   K   Hover info       \cc  Chat
- \fb  Buffers     \rn Rename           \cm  Commit message
- \fh  Help tags   \ca Code action      \ca  Actions (visual)
- F9   Aerial      \f  Format
+ ±/~  Tree focus  gi  Implementation   A-l  Toggle chat
+ \ff  Find files  K   Hover info       \ci  Rewrite (visual)
+ \fg  Live grep   \rn Rename           \cc  Chat
+ \fb  Buffers     \ca Code action      \cm  Commit message
+ \fh  Help tags   \f  Format           \ca  Actions (visual)
+ F9   Aerial
 
  TERMINAL (C-b prefix)                 PYTHON & TESTING
  C-b n/p  Next/prev tab               \ta  Pytest all
  C-b c    New tab                      \tf  Pytest file
  C-b v    Vsplit                       \tn  Pytest nearest
- \r       Toggle split / run sel       \rx  Ruff fix
+ \rt      Toggle split                 \rx  Ruff fix
  \rv      Toggle vsplit                \x   Run file
+ \rl      Run current line
+ \r       Run selection (visual)
 
- SPEECH
- \ss  Speak selection (visual)
- \sq  Stop speaking
+ WINDOW           SPEECH               WEB
+ F3   Zoom split  \ss  Speak sel       \ws  Summarize web page
+                  \sq  Stop speaking
 
  EDITING          COMPLETION (insert)  COMMANDS
  jk  Leave insert C-Space Trigger      :ReloadConfig
                   Enter   Confirm      :CC  CodeCompanion
-                  C-e     Abort        :Cheatsheet
+                  C-e     Abort        :Agenda [date]
+                                       :Cheatsheet
 ]]
 
 function M.show()
