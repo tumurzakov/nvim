@@ -586,6 +586,7 @@ local function run_command_in_terminal(command, path_for_root)
     full = full .. "\n"
   end
   vim.fn.chansend(chan, full)
+  vim.schedule(function() scroll_terminal_to_bottom(chan) end)
 end
 
 local function nearest_pytest_nodeid()

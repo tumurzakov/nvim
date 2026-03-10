@@ -18,3 +18,6 @@ require("lazy").setup("plugins")
 
 -- Startup cheatsheet (shown when no files given)
 require("config.help").setup()
+
+-- :Agenda command
+require("config.agenda").setup()

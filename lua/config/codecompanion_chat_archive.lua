@@ -77,12 +77,14 @@ end
 -- saved_files: all .chats/*.md files sorted oldest→newest
 -- cursor:     index into saved_files of the currently viewed saved chat
 --             nil = viewing a fresh (non-saved) chat
--- loaded:     saved_files index → bufnr (lazily populated, one at a time)
+-- loaded:     saved_files index → bufnr (lazily populated)
+-- fresh_bufnr: the original fresh chat bufnr to return to
 ----------------------------------------------------------------------
 local file_by_buf = {}
 local saved_files = nil
 local loaded = {}      -- file index → bufnr
 local cursor = nil     -- current position in saved_files (nil = fresh chat)
+local fresh_bufnr = nil
 
 local function init_saved_files()
   if saved_files then
@@ -92,9 +94,9 @@ local function init_saved_files()
   saved_files = list_chat_files(root)
 end
 
---- Materialize one saved chat into a CodeCompanion chat object.
---- Returns bufnr or nil.
-local function materialize(file_idx, current_chat)
+--- Load a saved chat file and open it as a new CodeCompanion chat.
+--- This lets the framework handle window management naturally.
+local function open_saved_chat(file_idx)
   if loaded[file_idx] then
     return loaded[file_idx]
   end
@@ -119,6 +121,7 @@ local function materialize(file_idx, current_chat)
     return nil
   end
 
+  -- cc.chat() will close the current chat and open the new one in the same spot
   local cc = require("codecompanion")
   local chat = cc.chat({
     messages = messages,
@@ -142,31 +145,59 @@ local function materialize(file_idx, current_chat)
   return chat.bufnr
 end
 
-local function switch_to_buf(from_chat, target_bufnr)
-  local codecompanion = require("codecompanion")
-  local prev_ui = codecompanion.buf_get_chat(from_chat.bufnr).ui
-  local window_opts = prev_ui.window_opts or { default = true }
-  if prev_ui.win and vim.api.nvim_win_is_valid(prev_ui.win) then
-    prev_ui:hide()
+--- Switch to an already-loaded chat by swapping the buffer in the current window.
+local function switch_to_loaded(from_chat, target_bufnr)
+  -- Find the window showing the current chat
+  local win = nil
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(w) == from_chat.bufnr then
+      win = w
+      break
+    end
   end
-  local target_chat = codecompanion.buf_get_chat(target_bufnr)
-  if target_chat and target_chat.ui then
-    target_chat.ui:open({ window_opts = window_opts })
-  end
+  if not (win and vim.api.nvim_win_is_valid(win)) then return false end
+
+  vim.api.nvim_win_set_buf(win, target_bufnr)
+  vim.api.nvim_set_current_win(win)
+  return true
 end
 
 ----------------------------------------------------------------------
 -- Navigation: { = older (cursor-1), } = newer (cursor+1 or fresh)
 ----------------------------------------------------------------------
 local function move_to_saved(chat, file_idx)
-  local bufnr = materialize(file_idx, chat)
+  -- Remember the fresh chat bufnr before first navigation
+  if cursor == nil and fresh_bufnr == nil then
+    fresh_bufnr = chat.bufnr
+  end
+
+  if loaded[file_idx] then
+    -- Already materialized — just swap buffer in the window
+    if not switch_to_loaded(chat, loaded[file_idx]) then
+      return false
+    end
+    cursor = file_idx
+    return true
+  end
+
+  -- Not yet loaded — use cc.chat() which handles window management
+  local bufnr = open_saved_chat(file_idx)
   if not bufnr then
-    -- File couldn't be loaded, skip it
     return false
   end
   cursor = file_idx
-  switch_to_buf(chat, bufnr)
   return true
+end
+
+local function return_to_fresh(chat)
+  if fresh_bufnr and vim.api.nvim_buf_is_valid(fresh_bufnr) then
+    if switch_to_loaded(chat, fresh_bufnr) then
+      cursor = nil
+      return true
+    end
+  end
+  cursor = nil
+  return false
 end
 
 M.next_chat = {
@@ -189,16 +220,8 @@ M.next_chat = {
       end
     end
 
-    -- Past newest saved → go back to fresh chats
-    -- Find the fresh chat bufnr (any buf not in file_by_buf)
-    local bufs = _G.codecompanion_buffers or {}
-    for _, b in ipairs(bufs) do
-      if not file_by_buf[b] then
-        cursor = nil
-        switch_to_buf(chat, b)
-        return
-      end
-    end
+    -- Past newest saved → go back to fresh chat
+    return_to_fresh(chat)
   end,
 }
 
@@ -225,14 +248,7 @@ M.previous_chat = {
     end
 
     -- Past oldest saved → wrap to fresh chat
-    local bufs = _G.codecompanion_buffers or {}
-    for _, b in ipairs(bufs) do
-      if not file_by_buf[b] then
-        cursor = nil
-        switch_to_buf(chat, b)
-        return
-      end
-    end
+    return_to_fresh(chat)
   end,
 }
 

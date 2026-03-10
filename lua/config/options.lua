@@ -2,6 +2,9 @@
 vim.g.mapleader = "\\"
 vim.g.maplocalleader = "\\"
 
+-- Persistent undo
+vim.opt.undofile = true
+
 -- Basic settings
 vim.o.number = true
 vim.o.relativenumber = true
