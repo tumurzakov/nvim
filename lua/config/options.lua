@@ -5,6 +5,13 @@ vim.g.maplocalleader = "\\"
 -- Persistent undo
 vim.opt.undofile = true
 
+-- Russian keyboard layout support in Normal/Visual/Operator-pending modes
+vim.opt.langmap = table.concat({
+  "ФИСВУАПРШОЛДЬТЩЗЙКЫЕГМЦЧНЯ;ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+  "фисвуапршолдьтщзйкыегмцчня;abcdefghijklmnopqrstuvwxyz",
+  "Ж:,ж\\;,Б<,Ю>,б\\,,ю.",
+}, ",")
+
 -- Basic settings
 vim.o.number = true
 vim.o.relativenumber = true
