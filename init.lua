@@ -21,3 +21,6 @@ require("config.help").setup()
 
 -- :Agenda command
 require("config.agenda").setup()
+
+-- Voice dictation (Vosk)
+require("config.dictation")
