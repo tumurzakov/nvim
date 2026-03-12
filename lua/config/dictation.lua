@@ -19,11 +19,62 @@ else
 end
 
 local models = {
-  ru = models_dir .. "/vosk-model-small-ru-0.22",
-  en = models_dir .. "/vosk-model-small-en-us-0.15",
+  ru = { dir = models_dir .. "/vosk-model-small-ru-0.22", url = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip" },
+  en = { dir = models_dir .. "/vosk-model-small-en-us-0.15", url = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip" },
 }
 
 local ns = vim.api.nvim_create_namespace("vosk_dictation")
+local downloading = {}
+
+local function ensure_model(lang, callback)
+  local m = models[lang]
+  if vim.fn.isdirectory(m.dir) == 1 then
+    callback(m.dir)
+    return
+  end
+  if downloading[lang] then
+    vim.notify("Already downloading " .. lang .. " model...", vim.log.levels.WARN)
+    return
+  end
+  downloading[lang] = true
+  vim.fn.mkdir(models_dir, "p")
+  local zip_path = models_dir .. "/" .. vim.fn.fnamemodify(m.dir, ":t") .. ".zip"
+  vim.notify("Downloading Vosk model [" .. lang .. "]...", vim.log.levels.INFO)
+  vim.system(
+    { "curl", "-L", "-o", zip_path, m.url },
+    { text = true },
+    function(result)
+      if result.code ~= 0 then
+        downloading[lang] = nil
+        vim.schedule(function()
+          vim.notify("Failed to download Vosk model [" .. lang .. "]", vim.log.levels.ERROR)
+        end)
+        return
+      end
+      -- unzip
+      local unzip_cmd
+      if is_win then
+        unzip_cmd = { "powershell", "-NoProfile", "-Command", "Expand-Archive", "-Path", zip_path, "-DestinationPath", models_dir, "-Force" }
+      else
+        unzip_cmd = { "unzip", "-o", "-d", models_dir, zip_path }
+      end
+      vim.system(unzip_cmd, { text = true }, function(uz)
+        vim.fn.delete(zip_path)
+        downloading[lang] = nil
+        if uz.code ~= 0 then
+          vim.schedule(function()
+            vim.notify("Failed to unzip Vosk model [" .. lang .. "]", vim.log.levels.ERROR)
+          end)
+          return
+        end
+        vim.schedule(function()
+          vim.notify("Vosk model [" .. lang .. "] ready!", vim.log.levels.INFO)
+          callback(m.dir)
+        end)
+      end)
+    end
+  )
+end
 
 local function detect_system_lang()
   if is_mac then
@@ -116,7 +167,7 @@ end
 
 local function ensure_running()
   if job_id then return true end
-  job_id = vim.fn.jobstart({ "python3", script_path, models[current_lang] }, {
+  job_id = vim.fn.jobstart({ "python3", script_path, models[current_lang].dir }, {
     on_stdout = on_stdout,
     on_exit = on_exit,
     stdin = "pipe",
@@ -138,8 +189,12 @@ local function start_lang_poll()
     if not is_listening or not job_id then return end
     local sys_lang = detect_system_lang()
     if sys_lang ~= current_lang and models[sys_lang] then
-      current_lang = sys_lang
-      vim.fn.chansend(job_id, "lang " .. models[sys_lang] .. "\n")
+      ensure_model(sys_lang, function(dir)
+        current_lang = sys_lang
+        if job_id then
+          vim.fn.chansend(job_id, "lang " .. dir .. "\n")
+        end
+      end)
     end
   end))
 end
@@ -153,16 +208,15 @@ local function stop_lang_poll()
 end
 
 function M.start()
-  -- Auto-detect language from system keyboard layout
   local sys_lang = detect_system_lang()
-  if not ensure_running() then return end
-  if sys_lang ~= current_lang then
-    M.set_lang(sys_lang)
-  end
-  if is_listening then return end
-  vim.fn.chansend(job_id, "start\n")
-  is_listening = true
-  start_lang_poll()
+  current_lang = sys_lang
+  ensure_model(current_lang, function(_)
+    if not ensure_running() then return end
+    if is_listening then return end
+    vim.fn.chansend(job_id, "start\n")
+    is_listening = true
+    start_lang_poll()
+  end)
 end
 
 function M.stop()
@@ -193,7 +247,7 @@ function M.set_lang(lang)
   end
   current_lang = lang
   if job_id then
-    vim.fn.chansend(job_id, "lang " .. models[lang] .. "\n")
+    vim.fn.chansend(job_id, "lang " .. models[lang].dir .. "\n")
   end
 end
 
