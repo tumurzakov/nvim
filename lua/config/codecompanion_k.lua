@@ -114,8 +114,7 @@ function M.short_explain()
   end
 
   local prompt_lines = {
-    "Give a short explanation for the symbol/class under cursor.",
-    "Keep it concise (max 6 bullets).",
+    "Explain what is under the cursor or selected in detail.",
     "Never use markdown tables or pipe-separated rows. Use bullet lists or labeled lines instead.",
     "Allowed permissions/tools only: " .. TOOL_PERMISSIONS .. ".",
     "Do not use any other tool, especially container.exec.",

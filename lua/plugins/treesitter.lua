@@ -15,5 +15,12 @@ return {
     pcall(function()
       ts.install({ "lua", "python", "yaml", "json", "markdown", "markdown_inline", "vim", "vimdoc", "query" })
     end)
+
+    -- Enable treesitter highlighting globally
+    vim.api.nvim_create_autocmd("FileType", {
+      callback = function(args)
+        pcall(vim.treesitter.start, args.buf)
+      end,
+    })
   end,
 }

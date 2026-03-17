@@ -67,6 +67,7 @@ local OPENROUTER_HEADERS = OPENROUTER_CFG.headers or {
 return {
   "olimorris/codecompanion.nvim",
   version = "^18.0.0", -- upgrade to v18 API
+  build = "git apply --ignore-whitespace " .. vim.fn.stdpath("config") .. "/patches/codecompanion.patch",
   dependencies = {
     "nvim-lua/plenary.nvim",
     "nvim-telescope/telescope.nvim",

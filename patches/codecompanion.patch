@@ -1,0 +1,133 @@
+diff --git a/lua/codecompanion/acp/init.lua b/lua/codecompanion/acp/init.lua
+index 7bd8ce3e..c18c9ece 100644
+--- a/lua/codecompanion/acp/init.lua
++++ b/lua/codecompanion/acp/init.lua
+@@ -117,14 +117,17 @@ function Connection:connect_and_initialize()
+     return self
+   end
+ 
++  log:debug("[acp::connect_and_initialize] Starting agent process...")
+   if not self:start_agent_process() then
++    log:error("[acp::connect_and_initialize] start_agent_process failed")
+     return nil
+   end
+ 
+   if not self._initialized then
++    log:debug("[acp::connect_and_initialize] Sending INITIALIZE request...")
+     local initialized = self:send_rpc_request(METHODS.INITIALIZE, self.adapter_modified.parameters)
+     if not initialized then
+-      return log:error("[acp::connect_and_initialize] Failed to initialize")
++      return log:error("[acp::connect_and_initialize] Failed to initialize (send_rpc_request returned nil - likely timeout)")
+     end
+     self._agent_info = initialized
+ 
+@@ -216,9 +219,10 @@ function Connection:connect_and_initialize()
+   end
+ 
+   if not self.session_id or not can_load then
++    log:debug("[acp::connect_and_initialize] Creating new session with mcpServers=%s", vim.inspect(session_args.mcpServers))
+     local new_session = self:send_rpc_request(METHODS.SESSION_NEW, session_args)
+     if not new_session or not new_session.sessionId then
+-      log:error("[acp::connect_and_initialize] Failed to create session")
++      log:error("[acp::connect_and_initialize] Failed to create session (new_session=%s)", vim.inspect(new_session))
+       return nil
+     end
+     self.session_id = new_session.sessionId
+@@ -310,7 +314,11 @@ function Connection:start_agent_process()
+     {
+       stdin = true,
+       cwd = vim.fn.getcwd(),
+-      env = adapter.env_replaced or {},
++      env = vim.tbl_extend("force", adapter.env_replaced or {}, {
++        -- Prevent "Cannot be launched inside another Claude Code session"
++        -- when Neovim inherits CLAUDECODE=1 from a parent Claude Code process
++        CLAUDECODE = "",
++      }),
+       stdout = self.methods.schedule_wrap(function(err, data)
+         if err then
+           log:error("[acp::start_agent_process::stdout] Error: %s", err)
+@@ -320,7 +328,9 @@ function Connection:start_agent_process()
+       end),
+       stderr = self.methods.schedule_wrap(function(err, data)
+         if err then
+-          log:error("[acp::start_agent_process::stderr] Error: %s", err)
++          log:error("[acp::stderr] Error: %s", err)
++        elseif data then
++          log:error("[acp::stderr] %s", data)
+         end
+       end),
+     },
+@@ -480,8 +490,8 @@ function Connection:handle_rpc_message(line)
+     log:error("[acp::handle_rpc_message] Invalid message format: %s", message)
+   end
+ 
+-  if message.error and message.error.code ~= -32603 then
+-    log:error("[acp::handle_rpc_message] Error: %s", message.error)
++  if message.error then
++    log:error("[acp::handle_rpc_message] Error (code=%s): %s", message.error.code, message.error)
+   end
+ end
+ 
+@@ -495,9 +505,20 @@ function Connection:store_rpc_response(response)
+     if self._active_prompt and self._active_prompt.handle_error then
+       self.methods.schedule(function()
+         local error_msg = response.error.message or "Unknown error"
+-        if response.error.data and response.error.data.error then
+-          error_msg = response.error.data.error
++        if response.error.data then
++          local d = response.error.data
++          if d.error then
++            error_msg = d.error
++          elseif d.details then
++            error_msg = error_msg .. ": " .. d.details
++          else
++            local ok, encoded = pcall(vim.json.encode, d)
++            if ok then
++              error_msg = error_msg .. ": " .. encoded
++            end
++          end
+         end
++        error_msg = string.format("%s (code=%s)", error_msg, response.error.code or "?")
+ 
+         self._active_prompt:handle_error(error_msg)
+       end)
+diff --git a/lua/codecompanion/interactions/chat/acp/handler.lua b/lua/codecompanion/interactions/chat/acp/handler.lua
+index 588f7a4a..2fa23b1b 100644
+--- a/lua/codecompanion/interactions/chat/acp/handler.lua
++++ b/lua/codecompanion/interactions/chat/acp/handler.lua
+@@ -62,6 +62,13 @@ end
+ ---Ensure ACP connection is established
+ ---@return boolean success
+ function ACPHandler:ensure_connection()
++  -- Clear stale connection if the underlying process died
++  if self.chat.acp_connection and not self.chat.acp_connection:is_connected() then
++    log:warn("[ACP::Handler] Stale connection detected, reconnecting...")
++    pcall(function() self.chat.acp_connection:disconnect() end)
++    self.chat.acp_connection = nil
++  end
++
+   if not self.chat.acp_connection then
+     self.chat.acp_connection = get_client().new({
+       adapter = self.chat.adapter, --[[@type CodeCompanion.ACPAdapter]]
+@@ -70,6 +77,7 @@ function ACPHandler:ensure_connection()
+     local connected = self.chat.acp_connection:connect_and_initialize()
+ 
+     if not connected then
++      self.chat.acp_connection = nil
+       return false
+     end
+ 
+@@ -302,6 +310,13 @@ function ACPHandler:handle_error(error)
+   self.chat.status = "error"
+   log:error("[ACP::Handler] %s", error)
+ 
++  -- Clear stale connection on transport/process errors so next submit reconnects
++  if self.chat.acp_connection and not self.chat.acp_connection:is_connected() then
++    log:warn("[ACP::Handler] Connection dead after error, clearing for reconnect")
++    pcall(function() self.chat.acp_connection:disconnect() end)
++    self.chat.acp_connection = nil
++  end
++
+   self.chat:add_buf_message(
+     { role = require("codecompanion.config").constants.LLM_ROLE, content = string.format("````txt\n%s\n````", error) },
+     { type = self.chat.MESSAGE_TYPES.LLM_MESSAGE }

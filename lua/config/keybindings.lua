@@ -1033,6 +1033,113 @@ map({ "n", "v" }, "<leader>tn", run_pytest_nearest, { desc = "Pytest nearest" })
 map("n", "<leader>rx", run_ruff_fix_current_file, { desc = "Ruff check --fix" })
 map("n", "<leader>x", run_current_python_script, { desc = "Run current Python file" })
 
+-- TTS: F8 reads with real-time word highlighting via NSSpeechSynthesizer
+local tts_ns = vim.api.nvim_create_namespace("tts_highlight")
+local tts_job = nil
+local tts_buf = nil
+local tts_py = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h") .. "/tts.py"
+
+local function tts_clear()
+  if tts_buf and vim.api.nvim_buf_is_valid(tts_buf) then
+    vim.api.nvim_buf_clear_namespace(tts_buf, tts_ns, 0, -1)
+  end
+  tts_buf = nil
+end
+
+local function tts_stop()
+  tts_clear()
+  if tts_job then
+    vim.fn.jobstop(tts_job)
+    tts_job = nil
+    return true
+  end
+  return false
+end
+
+local function tts_speak(buf, start_line, lines)
+  tts_stop()
+  local text = table.concat(lines, "\n")
+  if text == "" then return end
+
+  -- Map character offset in text -> (line, col) in buffer
+  local offsets = {} -- offsets[i] = { line, col } for character i (0-based)
+  local pos = 0
+  for i, line in ipairs(lines) do
+    for j = 1, #line do
+      offsets[pos] = { start_line + i - 1, j - 1 }
+      pos = pos + 1
+    end
+    offsets[pos] = { start_line + i - 1, #line } -- newline
+    pos = pos + 1
+  end
+
+  tts_buf = buf
+
+  tts_job = vim.fn.jobstart({ "python3", tts_py }, {
+    stdout_buffered = false,
+    on_stdout = function(_, data)
+      for _, line in ipairs(data) do
+        if line == "DONE" or line == "" then
+          -- done
+        else
+          local offset, length = line:match("^(%d+)%s+(%d+)$")
+          if offset then
+            offset = tonumber(offset)
+            length = tonumber(length)
+            vim.schedule(function()
+              if not tts_buf or not vim.api.nvim_buf_is_valid(tts_buf) then return end
+              vim.api.nvim_buf_clear_namespace(tts_buf, tts_ns, 0, -1)
+              local start_pos = offsets[offset]
+              local end_pos = offsets[offset + length] or offsets[offset + length - 1]
+              if start_pos then
+                local end_col = end_pos and end_pos[2] or (start_pos[2] + length)
+                local end_row = end_pos and end_pos[1] or start_pos[1]
+                if end_row == start_pos[1] then
+                  pcall(vim.api.nvim_buf_add_highlight, tts_buf, tts_ns, "Visual", start_pos[1], start_pos[2], end_col)
+                else
+                  -- Word spans lines (unlikely), just highlight start
+                  pcall(vim.api.nvim_buf_add_highlight, tts_buf, tts_ns, "Visual", start_pos[1], start_pos[2], -1)
+                end
+                pcall(vim.api.nvim_win_set_cursor, 0, { start_pos[1] + 1, start_pos[2] })
+              end
+            end)
+          end
+        end
+      end
+    end,
+    on_exit = function()
+      tts_job = nil
+      vim.schedule(tts_clear)
+    end,
+  })
+  vim.fn.chansend(tts_job, text)
+  vim.fn.chanclose(tts_job, "stdin")
+end
+
+map("n", "<F8>", function()
+  if tts_stop() then return end
+  local buf = vim.api.nvim_get_current_buf()
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local start_line = cursor[1] - 1
+  local lines = vim.api.nvim_buf_get_lines(buf, start_line, -1, false)
+  tts_speak(buf, start_line, lines)
+end, { desc = "TTS from cursor / stop" })
+
+map("v", "<F8>", function()
+  leave_visual_mode()
+  vim.schedule(function()
+    local buf = vim.api.nvim_get_current_buf()
+    local start_pos = vim.api.nvim_buf_get_mark(buf, "<")
+    local end_pos = vim.api.nvim_buf_get_mark(buf, ">")
+    if start_pos[1] == 0 then return end
+    local start_line = start_pos[1] - 1
+    local lines = vim.api.nvim_buf_get_lines(buf, start_line, end_pos[1], false)
+    if #lines > 0 then
+      tts_speak(buf, start_line, lines)
+    end
+  end)
+end, { desc = "TTS selection" })
+
 pcall(vim.api.nvim_del_user_command, "ReloadConfig")
 vim.api.nvim_create_user_command("ReloadConfig", reload_nvim_config, {
   desc = "Reload Neovim config and Lazy specs",
