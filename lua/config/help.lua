@@ -26,6 +26,10 @@ local help_text = [[
  F3   Zoom split  \ss  Speak sel       \ws  Summarize web page
                   \sq  Stop speaking
 
+ GIT (Diffview)
+ \gd  All changes (diffview)           \gc  Close diffview
+ \gh  File history                     \gH  Branch history
+
  EDITING          COMPLETION (insert)  COMMANDS
  jk  Leave insert C-Space Trigger      :ReloadConfig
                   Enter   Confirm      :CC  CodeCompanion
