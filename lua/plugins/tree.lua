@@ -2,6 +2,9 @@ return {
   "nvim-tree/nvim-tree.lua",
   dependencies = { "nvim-tree/nvim-web-devicons" },
   config = function()
+    local ok, settings_local = pcall(require, "config.settings_local")
+    local nerd_icons = not (ok and type(settings_local) == "table" and settings_local.nerd_font_icons == false)
+
     require("nvim-tree").setup({
       filters = {
         dotfiles = false,            -- показывать файлы, начинающиеся с точки
@@ -51,12 +54,31 @@ return {
       },
       renderer = {
         icons = {
-          -- Use Nerd Font icons for files and folders
           web_devicons = {
-            file = { enable = true, color = true },
-            folder = { enable = true, color = true },
+            file = { enable = nerd_icons, color = nerd_icons },
+            folder = { enable = nerd_icons, color = nerd_icons },
           },
-          show = { file = true, folder = true, folder_arrow = true, git = true },
+          show = { file = nerd_icons, folder = true, folder_arrow = true, git = true },
+          glyphs = nerd_icons and nil or {
+            default = "",
+            symlink = "@",
+            bookmark = "*",
+            modified = "+",
+            folder = {
+              arrow_closed = ">",
+              arrow_open = "v",
+              default = "+",
+              open = "-",
+              empty = " ",
+              empty_open = " ",
+              symlink = "@",
+              symlink_open = "@",
+            },
+            git = {
+              unstaged = "M", staged = "+", unmerged = "!",
+              renamed = "R", untracked = "?", deleted = "D", ignored = "I",
+            },
+          },
         },
       },
     })
