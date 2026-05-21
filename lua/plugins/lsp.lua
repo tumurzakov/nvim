@@ -5,6 +5,18 @@ return {
     "williamboman/mason-lspconfig.nvim",
   },
   config = function()
+    local ok, settings_local = pcall(require, "config.settings_local")
+    local disabled = {}
+    if ok and type(settings_local) == "table" and type(settings_local.lsp_disabled) == "table" then
+      for _, name in ipairs(settings_local.lsp_disabled) do disabled[name] = true end
+    end
+    local function enabled(name) return not disabled[name] end
+    local function filter(list)
+      local out = {}
+      for _, name in ipairs(list) do if enabled(name) then out[#out + 1] = name end end
+      return out
+    end
+
     vim.filetype.add({
       filename = { ["go.work"] = "gowork" },
       extension = { gotmpl = "gotmpl" },
@@ -13,7 +25,7 @@ return {
     -- Mason setup
     require("mason").setup()
     require("mason-lspconfig").setup({
-      ensure_installed = { "pyright", "ruff", "gopls", "jsonls" },
+      ensure_installed = filter({ "pyright", "ruff", "gopls", "jsonls" }),
       automatic_installation = true,
     })
 
@@ -106,12 +118,14 @@ return {
       on_attach = on_attach,
     })
 
-    vim.lsp.config("gopls", {
-      cmd = resolve_cmd("gopls"),
-      filetypes = { "go", "gomod" },
-      capabilities = capabilities,
-      on_attach = on_attach,
-    })
+    if enabled("gopls") then
+      vim.lsp.config("gopls", {
+        cmd = resolve_cmd("gopls"),
+        filetypes = { "go", "gomod" },
+        capabilities = capabilities,
+        on_attach = on_attach,
+      })
+    end
 
     vim.lsp.config("jsonls", {
       cmd = resolve_cmd("vscode-json-language-server", { "--stdio" }),
@@ -127,7 +141,7 @@ return {
       on_attach = on_attach,
     })
 
-    vim.lsp.enable({ "pyright", "ruff", "gopls", "jsonls" })
+    vim.lsp.enable(filter({ "pyright", "ruff", "gopls", "jsonls" }))
     vim.api.nvim_create_autocmd("VimEnter", {
       group = vim.api.nvim_create_augroup("user.lsp.bootstrap", { clear = true }),
       once = true,
