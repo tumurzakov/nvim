@@ -191,7 +191,7 @@ Rules:
         },
       },
     }),
-    extensions = {
+    extensions = ok and settings_local.codecompanion and {
       mcphub = {
         callback = "mcphub.extensions.codecompanion",
         opts = {
@@ -200,7 +200,7 @@ Rules:
           show_result_in_chat = true,
         },
       },
-    },
+    } or {},
     rules = {},
     display = {
       chat = {
