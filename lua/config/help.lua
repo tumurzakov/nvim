@@ -66,12 +66,30 @@ function M.show()
   vim.bo[buf].modifiable = false
   vim.bo[buf].filetype = "help_cheatsheet"
 
-  vim.api.nvim_set_current_buf(buf)
+  -- Calculate popup size
+  local width = 0
+  for _, line in ipairs(lines) do
+    width = math.max(width, vim.fn.strdisplaywidth(line))
+  end
+  width = math.min(width + 2, vim.o.columns - 4)
+  local height = math.min(#lines, vim.o.lines - 4)
+
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    row = math.floor((vim.o.lines - height) / 2),
+    col = math.floor((vim.o.columns - width) / 2),
+    width = width,
+    height = height,
+    style = "minimal",
+    border = "rounded",
+    title = " Cheatsheet ",
+    title_pos = "center",
+  })
 
   -- Close on any key press
   local close = function()
-    if vim.api.nvim_buf_is_valid(buf) then
-      vim.api.nvim_buf_delete(buf, { force = true })
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
     end
   end
 
@@ -83,6 +101,7 @@ function M.show()
   -- Open recent file by number
   for i, f in ipairs(recent) do
     vim.keymap.set("n", tostring(i), function()
+      close()
       vim.cmd("edit " .. vim.fn.fnameescape(cwd .. "/" .. f))
     end, { buffer = buf, nowait = true })
   end

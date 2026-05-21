@@ -64,6 +64,12 @@ local OPENROUTER_HEADERS = OPENROUTER_CFG.headers or {
   ["X-Title"] = "Neovim CodeCompanion",
 }
 
+-- Dial (OpenAI-compatible proxy) local config
+local DIAL_CFG = cc.dial or {}
+local DIAL_API_KEY = DIAL_CFG.api_key or os.getenv("DIAL_API_KEY")
+local DIAL_MODEL = DIAL_CFG.model or ""
+local DIAL_ENDPOINT = DIAL_CFG.endpoint or os.getenv("DIAL_ENDPOINT") or "https://proxy.example.com/openai"
+
 return {
   "olimorris/codecompanion.nvim",
   version = "^18.0.0", -- upgrade to v18 API
@@ -95,11 +101,25 @@ All non-code text responses must be written in the %s language.
 The current date is %s.
 The user's Neovim version is %s.
 The user is working on a %s machine. Please respond with system specific commands if applicable.
+## OUTPUT WIDTH CONSTRAINT (MANDATORY)
+The output window is exactly %d columns wide. This is a hard limit — every line of your response MUST fit within %d characters.
+Rules:
+- Before writing a markdown table, mentally calculate total width: sum of all column contents + separators (` | `). If it exceeds %d characters, DO NOT use a table.
+- When a table would be too wide, use a vertical key-value format instead:
+  **Row Title**
+  - Key1: value1
+  - Key2: value2
+- Code blocks also must not exceed %d columns.
+- This constraint overrides all other formatting preferences.
 ]],
                 ctx.language,
                 ctx.date,
                 ctx.nvim_version,
-                ctx.os
+                ctx.os,
+                vim.api.nvim_win_get_width(0),
+                vim.api.nvim_win_get_width(0),
+                vim.api.nvim_win_get_width(0),
+                vim.api.nvim_win_get_width(0)
               )
               .. "\n" .. global_rules
           end,
@@ -204,6 +224,18 @@ The user is working on a %s machine. Please respond with system specific command
               models_endpoint = "/models",
             },
             headers = OPENROUTER_HEADERS,
+          })
+        end,
+        -- Dial / OpenAI-compatible proxy (custom adapter)
+        dial = function()
+          return require("codecompanion.adapters").extend(require("adapters.dial"), {
+            schema = {
+              model = { default = DIAL_MODEL },
+            },
+            env = {
+              api_key = DIAL_API_KEY,
+              url = DIAL_ENDPOINT,
+            },
           })
         end,
         -- Local Ollama (ensure `ollama serve` is running)

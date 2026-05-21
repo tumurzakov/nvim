@@ -15,9 +15,16 @@ if [ -n "$LOCALAPPDATA" ] && command -v cygpath >/dev/null 2>&1; then
   fi
 fi
 
-# Find poetry.lock by walking up from cwd and set VIRTUAL_ENV for pyright
+# Find project root by walking up from cwd and set VIRTUAL_ENV for pyright
 _dir="$PWD"
 while [ "$_dir" != "/" ]; do
+  # uv projects: uv.lock with .venv in project root
+  if [ -f "$_dir/uv.lock" ] && [ -d "$_dir/.venv" ]; then
+    export VIRTUAL_ENV="$_dir/.venv"
+    export PATH="$_dir/.venv/bin:$PATH"
+    break
+  fi
+  # Poetry projects
   if [ -f "$_dir/poetry.lock" ] && command -v poetry >/dev/null 2>&1; then
     _venv="$(cd "$_dir" && poetry env info -p 2>/dev/null)"
     if [ -n "$_venv" ] && [ -d "$_venv" ]; then

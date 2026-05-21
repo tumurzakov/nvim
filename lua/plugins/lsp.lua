@@ -46,6 +46,7 @@ return {
       on_attach = on_attach,
       root_markers = {
         "pyproject.toml",
+        "uv.lock",
         "poetry.lock",
         "setup.py",
         "setup.cfg",
@@ -57,23 +58,31 @@ return {
         local root = client.root_dir
         if not root then return end
 
-        -- Resolve Poetry virtualenv and tell pyright the exact pythonPath
-        local poetry_lock = root .. "/poetry.lock"
-        if not vim.uv.fs_stat(poetry_lock) then return end
+        local python
+        local is_win = vim.fn.has("win32") == 1
 
-        local result = vim.system(
-          { "poetry", "env", "info", "-p" },
-          { cwd = root, text = true }
-        ):wait()
-        if result.code ~= 0 then return end
+        -- uv project: .venv in project root
+        local uv_lock = root .. "/uv.lock"
+        local uv_venv = root .. "/.venv"
+        if vim.uv.fs_stat(uv_lock) and vim.uv.fs_stat(uv_venv) then
+          python = is_win and (uv_venv .. "/Scripts/python.exe") or (uv_venv .. "/bin/python")
+        else
+          -- Poetry project
+          local poetry_lock = root .. "/poetry.lock"
+          if not vim.uv.fs_stat(poetry_lock) then return end
 
-        local venv = vim.trim(result.stdout)
-        if venv == "" or not vim.uv.fs_stat(venv) then return end
+          local result = vim.system(
+            { "poetry", "env", "info", "-p" },
+            { cwd = root, text = true }
+          ):wait()
+          if result.code ~= 0 then return end
 
-        local python = venv .. "/bin/python"
-        if vim.fn.has("win32") == 1 then
-          python = venv .. "/Scripts/python.exe"
+          local venv = vim.trim(result.stdout)
+          if venv == "" or not vim.uv.fs_stat(venv) then return end
+          python = is_win and (venv .. "/Scripts/python.exe") or (venv .. "/bin/python")
         end
+
+        if not python then return end
 
         client.settings = vim.tbl_deep_extend("force", client.settings or {}, {
           python = { pythonPath = python },

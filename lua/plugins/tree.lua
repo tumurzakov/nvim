@@ -34,6 +34,13 @@ return {
         vim.keymap.set("n", "P", api.node.open.preview_no_picker, opts("Preview (keep focus)"))
         -- жмём "t" => открыть в новом табе
         vim.keymap.set("n", "t", api.node.open.tab, opts("Open in new tab"))
+        -- жмём "gd" => открыть diffview для файла (рабочие изменения)
+        vim.keymap.set("n", "gd", function()
+          local node = api.tree.get_node_under_cursor()
+          if node and node.absolute_path then
+            vim.cmd("DiffviewOpen -- " .. vim.fn.fnameescape(node.absolute_path))
+          end
+        end, opts("Diffview: file diff"))
         -- при желании можно ещё добавить "T" на tab drop:
         -- vim.keymap.set("n", "T", api.node.open.tab_drop, opts("Open: Tab drop"))
       end,

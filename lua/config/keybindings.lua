@@ -1033,11 +1033,18 @@ map({ "n", "v" }, "<leader>tn", run_pytest_nearest, { desc = "Pytest nearest" })
 map("n", "<leader>rx", run_ruff_fix_current_file, { desc = "Ruff check --fix" })
 map("n", "<leader>x", run_current_python_script, { desc = "Run current Python file" })
 
--- TTS: F8 reads with real-time word highlighting via NSSpeechSynthesizer
+-- TTS: F8 reads paragraph-by-paragraph with real-time word highlighting
 local tts_ns = vim.api.nvim_create_namespace("tts_highlight")
 local tts_job = nil
 local tts_buf = nil
+local tts_continuing = false -- true = auto-advance to next paragraph
 local tts_py = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h") .. "/tts.py"
+
+-- Set ElevenLabs API key once at load time
+local ok_sl, sl = pcall(require, "config.settings_local")
+if ok_sl and sl.elevenlabs_api_key then
+  vim.env.ELEVENLABS_API_KEY = sl.elevenlabs_api_key
+end
 
 local function tts_clear()
   if tts_buf and vim.api.nvim_buf_is_valid(tts_buf) then
@@ -1047,6 +1054,7 @@ local function tts_clear()
 end
 
 local function tts_stop()
+  tts_continuing = false
   tts_clear()
   if tts_job then
     vim.fn.jobstop(tts_job)
@@ -1056,20 +1064,63 @@ local function tts_stop()
   return false
 end
 
-local function tts_speak(buf, start_line, lines)
-  tts_stop()
+local TTS_CHUNK_LIMIT = 300 -- max chars per TTS call
+
+--- Find next chunk starting from `from_line` (0-based).
+--- Collects paragraphs until reaching TTS_CHUNK_LIMIT chars or EOF.
+--- Returns start_line, end_line (0-based, exclusive end) or nil if EOF.
+local function tts_next_chunk(buf, from_line)
+  local total = vim.api.nvim_buf_line_count(buf)
+  -- Skip leading blank lines
+  local start = from_line
+  while start < total do
+    local l = vim.api.nvim_buf_get_lines(buf, start, start + 1, false)[1]
+    if not l:match("^%s*$") then break end
+    start = start + 1
+  end
+  if start >= total then return nil end
+  -- Collect lines, breaking at paragraph boundary once limit exceeded
+  local finish = start
+  local chars = 0
+  local in_blank = false
+  while finish < total do
+    local l = vim.api.nvim_buf_get_lines(buf, finish, finish + 1, false)[1]
+    local is_blank = l:match("^%s*$") ~= nil
+    -- Break at paragraph boundary if we have enough text
+    if is_blank and chars >= TTS_CHUNK_LIMIT then break end
+    if not is_blank then
+      chars = chars + #l + 1
+    end
+    in_blank = is_blank
+    finish = finish + 1
+  end
+  -- Trim trailing blank lines from the chunk
+  while finish > start do
+    local l = vim.api.nvim_buf_get_lines(buf, finish - 1, finish, false)[1]
+    if not l:match("^%s*$") then break end
+    finish = finish - 1
+  end
+  if finish <= start then return nil end
+  return start, finish
+end
+
+local function tts_speak_paragraph(buf, start_line, end_line)
+  local lines = vim.api.nvim_buf_get_lines(buf, start_line, end_line, false)
   local text = table.concat(lines, "\n")
-  if text == "" then return end
+  if text:match("^%s*$") then
+    tts_continuing = false
+    return
+  end
 
   -- Map character offset in text -> (line, col) in buffer
-  local offsets = {} -- offsets[i] = { line, col } for character i (0-based)
+  local offsets = {}
   local pos = 0
   for i, line in ipairs(lines) do
     for j = 1, #line do
       offsets[pos] = { start_line + i - 1, j - 1 }
       pos = pos + 1
     end
-    offsets[pos] = { start_line + i - 1, #line } -- newline
+    offsets[pos] = { start_line + i - 1, #line }
     pos = pos + 1
   end
 
@@ -1077,6 +1128,10 @@ local function tts_speak(buf, start_line, lines)
 
   tts_job = vim.fn.jobstart({ "python3", tts_py }, {
     stdout_buffered = false,
+    on_stderr = function(_, data)
+      local msg = table.concat(data, "\n")
+      if msg ~= "" then vim.schedule(function() vim.notify("TTS: " .. msg, vim.log.levels.WARN) end) end
+    end,
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
         if line == "DONE" or line == "" then
@@ -1097,7 +1152,6 @@ local function tts_speak(buf, start_line, lines)
                 if end_row == start_pos[1] then
                   pcall(vim.api.nvim_buf_add_highlight, tts_buf, tts_ns, "Visual", start_pos[1], start_pos[2], end_col)
                 else
-                  -- Word spans lines (unlikely), just highlight start
                   pcall(vim.api.nvim_buf_add_highlight, tts_buf, tts_ns, "Visual", start_pos[1], start_pos[2], -1)
                 end
                 pcall(vim.api.nvim_win_set_cursor, 0, { start_pos[1] + 1, start_pos[2] })
@@ -1109,7 +1163,18 @@ local function tts_speak(buf, start_line, lines)
     end,
     on_exit = function()
       tts_job = nil
-      vim.schedule(tts_clear)
+      vim.schedule(function()
+        tts_clear()
+        -- Auto-advance to next paragraph if not stopped
+        if tts_continuing and buf and vim.api.nvim_buf_is_valid(buf) then
+          local next_start, next_end = tts_next_chunk(buf, end_line)
+          if next_start then
+            tts_speak_paragraph(buf, next_start, next_end)
+          else
+            tts_continuing = false
+          end
+        end
+      end)
     end,
   })
   vim.fn.chansend(tts_job, text)
@@ -1120,10 +1185,11 @@ map("n", "<F8>", function()
   if tts_stop() then return end
   local buf = vim.api.nvim_get_current_buf()
   local cursor = vim.api.nvim_win_get_cursor(0)
-  local start_line = cursor[1] - 1
-  local lines = vim.api.nvim_buf_get_lines(buf, start_line, -1, false)
-  tts_speak(buf, start_line, lines)
-end, { desc = "TTS from cursor / stop" })
+  local start, finish = tts_next_chunk(buf, cursor[1] - 1)
+  if not start then return end
+  tts_continuing = true
+  tts_speak_paragraph(buf, start, finish)
+end, { desc = "TTS from cursor paragraph-by-paragraph / stop" })
 
 map("v", "<F8>", function()
   leave_visual_mode()
