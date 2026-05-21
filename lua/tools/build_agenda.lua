@@ -5,6 +5,9 @@ local CONTEXT_SRC = os.getenv("HOME") .. "/sources/context/src"
 local CONTEXT_DIR = os.getenv("HOME") .. "/sources/context"
 local SKILLS_DIR = CONTEXT_DIR .. "/skills"
 
+local ok_sl, settings_local = pcall(require, "config.settings_local")
+local AGENDA_CFG = ok_sl and (settings_local.agenda or {}) or {}
+
 --- Read a file and return its content or nil
 local function read_file(path)
   local f = io.open(path, "r")
@@ -70,19 +73,11 @@ return {
       local calendar = fetch_via_python(calendar_code)
       table.insert(parts, fmt("## Raw Teams Calendar\n\n%s", calendar or "Failed to fetch Teams calendar."))
 
-      -- 5. Fetch web pages (performance, workplace, learning, applications)
-      local web_pages = {
-        {
-          name = "Performance Portal",
-          url = "https://example.com/telescope/profile?p=%2Fembedded%2Fpeople%2Fprofile%2FREDACTED_ID%2Fperformance",
-        },
-        { name = "Workplace", url = "https://example.com/workplace" },
-        { name = "Learning", url = "https://learning.example.com/myLearning/overview" },
-        {
-          name = "Applications",
-          url = "https://example.com/opportunities/positions/applications",
-        },
-      }
+      -- 5. Fetch web pages (configured in settings_local.agenda.web_pages)
+      local web_pages = {}
+      for _, entry in ipairs(AGENDA_CFG.web_pages or {}) do
+        table.insert(web_pages, { name = entry[1], url = entry[2] })
+      end
       for _, page in ipairs(web_pages) do
         local web_code = fmt(
           "import sys; sys.path.insert(0,'%s'); from fetch_web import fetch_page_text; print(fetch_page_text('%s') or 'Failed to fetch.')",

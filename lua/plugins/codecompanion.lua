@@ -68,7 +68,7 @@ local OPENROUTER_HEADERS = OPENROUTER_CFG.headers or {
 local DIAL_CFG = cc.dial or {}
 local DIAL_API_KEY = DIAL_CFG.api_key or os.getenv("DIAL_API_KEY")
 local DIAL_MODEL = DIAL_CFG.model or ""
-local DIAL_ENDPOINT = DIAL_CFG.endpoint or os.getenv("DIAL_ENDPOINT") or "https://proxy.example.com/openai"
+local DIAL_ENDPOINT = DIAL_CFG.endpoint or os.getenv("DIAL_ENDPOINT")
 
 return {
   "olimorris/codecompanion.nvim",

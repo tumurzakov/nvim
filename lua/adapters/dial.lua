@@ -22,7 +22,7 @@ return {
   url = "${url}/deployments/${deployment}/chat/completions",
   env = {
     api_key = "DIAL_API_KEY",
-    url = "https://proxy.example.com/openai",
+    url = "DIAL_ENDPOINT",
     deployment = "schema.model.default",
   },
   headers = {

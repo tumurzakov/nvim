@@ -35,11 +35,29 @@ M.codecompanion = {
     endpoint = "http://127.0.0.1:11434",
   },
 
+  -- OpenAI-compatible proxy (e.g. corporate AI gateway).
+  -- Leave commented out unless you have access.
+  -- dial = {
+  --   api_key = "",
+  --   model = "gpt-4o-2024-08-06",
+  --   endpoint = "https://your-proxy.example.com/openai",
+  -- },
+
   -- Control defaults for /ci, chat, inline, cmd.
   strategies = {
     cmd = { adapter = "codex" },
     chat = { adapter = "codex" },
     inline = { adapter = "codex" },
+  },
+}
+
+-- Agenda builder: web pages to scrape for context. Each entry is { name, url }.
+-- Add your own corporate dashboards, profile pages, etc. URLs may contain
+-- personal IDs — keep this file git-ignored.
+M.agenda = {
+  web_pages = {
+    -- { "Workplace", "https://your-portal.example.com/workplace" },
+    -- { "Learning",  "https://learn.example.com/myLearning" },
   },
 }
 

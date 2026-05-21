@@ -5,6 +5,9 @@ local PYTHON_CMD = "python3"
 local CONTEXT_SRC = os.getenv("HOME") .. "/sources/context/src"
 local CONTEXT_DIR = os.getenv("HOME") .. "/sources/context"
 
+local ok_sl, settings_local = pcall(require, "config.settings_local")
+local AGENDA_CFG = ok_sl and (settings_local.agenda or {}) or {}
+
 local function read_file(path)
   local f = io.open(path, "r")
   if not f then return nil end
@@ -96,13 +99,8 @@ function M.build(date_str)
   end
   add_section(parts, "Passed Courses", courses)
 
-  -- 6. Web pages
-  local web_pages = {
-    { "Performance Portal", "https://example.com/telescope/profile?p=%2Fembedded%2Fpeople%2Fprofile%2FREDACTED_ID%2Fperformance" },
-    { "Workplace", "https://example.com/workplace" },
-    { "Learning", "https://learning.example.com/myLearning/overview" },
-    { "Applications", "https://example.com/opportunities/positions/applications" },
-  }
+  -- 6. Web pages (configured in settings_local.agenda.web_pages)
+  local web_pages = AGENDA_CFG.web_pages or {}
   for _, page in ipairs(web_pages) do
     local name, url = page[1], page[2]
     vim.notify(fmt("[Agenda] Fetching %s...", name), vim.log.levels.INFO)
