@@ -29,6 +29,7 @@ local help_text = [[
  GIT (Diffview)
  \gd  All changes (diffview)           \gc  Close diffview
  \gh  File history                     \gH  Branch history
+ gd   File diff (in tree)              gB   Diff vs base branch (in tree)
 
  EDITING          COMPLETION (insert)  COMMANDS
  jk  Leave insert C-Space Trigger      :ReloadConfig

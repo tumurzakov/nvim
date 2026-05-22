@@ -4,6 +4,7 @@ return {
   config = function()
     local ok, settings_local = pcall(require, "config.settings_local")
     local nerd_icons = not (ok and type(settings_local) == "table" and settings_local.nerd_font_icons == false)
+    local git_base = (ok and type(settings_local) == "table" and settings_local.git_base_branch) or "main"
 
     require("nvim-tree").setup({
       filters = {
@@ -44,6 +45,19 @@ return {
             vim.cmd("DiffviewOpen -- " .. vim.fn.fnameescape(node.absolute_path))
           end
         end, opts("Diffview: file diff"))
+        -- жмём "gB" => diffview против базовой ветки для репо под курсором
+        vim.keymap.set("n", "gB", function()
+          local node = api.tree.get_node_under_cursor()
+          if not (node and node.absolute_path) then return end
+          local path = node.absolute_path
+          local dir = vim.fn.isdirectory(path) == 1 and path or vim.fn.fnamemodify(path, ":h")
+          local out = vim.fn.systemlist({ "git", "-C", dir, "rev-parse", "--show-toplevel" })
+          if vim.v.shell_error ~= 0 or not out[1] or out[1] == "" then
+            vim.notify("Not a git repo: " .. dir, vim.log.levels.WARN)
+            return
+          end
+          vim.cmd("DiffviewOpen -C" .. vim.fn.fnameescape(out[1]) .. " " .. git_base .. "...HEAD")
+        end, opts("Diffview: vs " .. git_base))
         -- при желании можно ещё добавить "T" на tab drop:
         -- vim.keymap.set("n", "T", api.node.open.tab_drop, opts("Open: Tab drop"))
       end,
@@ -59,7 +73,7 @@ return {
             folder = { enable = nerd_icons, color = nerd_icons },
           },
           show = { file = nerd_icons, folder = true, folder_arrow = true, git = true },
-          glyphs = nerd_icons and nil or {
+          glyphs = (not nerd_icons) and {
             default = "",
             symlink = "@",
             bookmark = "*",
@@ -78,7 +92,7 @@ return {
               unstaged = "M", staged = "+", unmerged = "!",
               renamed = "R", untracked = "?", deleted = "D", ignored = "I",
             },
-          },
+          } or nil,
         },
       },
     })

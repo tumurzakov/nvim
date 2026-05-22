@@ -51,6 +51,9 @@ M.codecompanion = {
   },
 }
 
+-- Base branch used by nvim-tree `gd` (diff vs base). Defaults to "main".
+-- M.git_base_branch = "develop"
+
 -- Agenda builder: web pages to scrape for context. Each entry is { name, url }.
 -- Add your own corporate dashboards, profile pages, etc. URLs may contain
 -- personal IDs — keep this file git-ignored.
