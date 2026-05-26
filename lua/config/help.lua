@@ -112,17 +112,6 @@ function M.setup()
   vim.api.nvim_create_user_command("Cheatsheet", M.show, {
     desc = "Show custom keybindings cheatsheet",
   })
-
-  -- Show on startup when no files were given as arguments
-  vim.api.nvim_create_autocmd("VimEnter", {
-    callback = function()
-      -- Only show when nvim was opened with no file arguments
-      if vim.fn.argc() == 0 then
-        -- Defer so the UI is fully drawn first
-        vim.schedule(M.show)
-      end
-    end,
-  })
 end
 
 return M
