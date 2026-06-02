@@ -58,8 +58,13 @@ return {
           end
           vim.cmd("DiffviewOpen -C" .. vim.fn.fnameescape(out[1]) .. " " .. git_base .. "...HEAD")
         end, opts("Diffview: vs " .. git_base))
-        -- при желании можно ещё добавить "T" на tab drop:
-        -- vim.keymap.set("n", "T", api.node.open.tab_drop, opts("Open: Tab drop"))
+        -- жмём "T" => открыть shared-терминал и сделать cd в выбранную папку (файл => его каталог)
+        vim.keymap.set("n", "T", function()
+          local node = api.tree.get_node_under_cursor()
+          if node and node.absolute_path then
+            require("config.shared_term").cd(node.absolute_path)
+          end
+        end, opts("Terminal here (cd)"))
       end,
 
       -- остальная твоя конфигурация, если есть
@@ -96,5 +101,6 @@ return {
         },
       },
     })
+
   end,
 }

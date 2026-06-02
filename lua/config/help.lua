@@ -15,13 +15,11 @@ local help_text = [[
                                        /diff in chat: insert git diff
 
  TERMINAL (C-b prefix)                 PYTHON & TESTING
- C-b n/p  Next/prev tab               \ta  Pytest all
+ C-b n/p  Next/prev tab                \ta  Pytest all
  C-b c    New tab                      \tf  Pytest file
- C-b v    Vsplit                       \tn  Pytest nearest
- \rt      Toggle split                 \rx  Ruff fix
- \rv      Toggle vsplit                \x   Run file
- \rl      Run current line
- \r       Run selection (visual)
+ \rl      Run current line             \tn  Pytest nearest
+ \r       Run selection (visual)       \rx  Ruff fix
+ T        Tree: open/switch term here  \x   Run file
 
  WINDOW           SPEECH               WEB
  F3   Zoom split  \ss  Speak sel       \ws  Summarize web page
