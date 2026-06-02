@@ -19,7 +19,8 @@ local help_text = [[
  C-b c    New tab                      \tf  Pytest file
  \rl      Run current line             \tn  Pytest nearest
  \r       Run selection (visual)       \rx  Ruff fix
- T        Tree: open/switch term here  \x   Run file
+ T        Tree: term here (keep tree)  \x   Run file
+ \T       Tree: term here (focus term)
 
  WINDOW           SPEECH               WEB
  F3   Zoom split  \ss  Speak sel       \ws  Summarize web page

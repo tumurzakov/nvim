@@ -108,13 +108,15 @@ end
 ---Switch to (or create) a terminal at the given path.
 ---If `path` is a file, uses its parent directory.
 ---Prefers to reuse: (1) the visible terminal window, (2) the main editor
----window. Falls back to a new split. Stays in normal mode and returns
----focus to the calling window.
+---window. Falls back to a new split. Stays in normal mode.
+---By default returns focus to the calling window; pass `opts.focus = true`
+---to leave focus on the terminal.
 ---@param path string
----@param layout? "split"|"vsplit"  (used only when creating a new split)
-function M.cd(path, layout)
+---@param opts? { layout?: "split"|"vsplit", focus?: boolean }
+function M.cd(path, opts)
   if not path or path == "" then return end
-  layout = layout or "vsplit"
+  opts = opts or {}
+  local layout = opts.layout or "vsplit"
   if vim.fn.isdirectory(path) == 0 then
     path = vim.fs.dirname(path)
   end
@@ -125,12 +127,14 @@ function M.cd(path, layout)
   local target = find_terminal_for_path(path)
   local _, term_win = any_visible_terminal()
   local host_win = term_win or find_main_editor_win()
+  local landed_win
 
   if target then
     if host_win then
       vim.api.nvim_win_set_buf(host_win, target.bufnr)
+      landed_win = host_win
     else
-      attach_existing(target, layout)
+      landed_win = attach_existing(target, layout)
     end
     move_to_mru(target)
   elseif host_win then
@@ -140,12 +144,20 @@ function M.cd(path, layout)
     local bufnr = vim.api.nvim_get_current_buf()
     vim.bo[bufnr].bufhidden = "hide"
     table.insert(terminals, 1, { bufnr = bufnr, cwd = path })
+    landed_win = host_win
   else
-    create_new(path, layout)
+    local _, win = create_new(path, layout)
+    landed_win = win
   end
 
-  if origin and vim.api.nvim_win_is_valid(origin) then
-    vim.api.nvim_set_current_win(origin)
+  if opts.focus then
+    if landed_win and vim.api.nvim_win_is_valid(landed_win) then
+      vim.api.nvim_set_current_win(landed_win)
+    end
+  else
+    if origin and vim.api.nvim_win_is_valid(origin) then
+      vim.api.nvim_set_current_win(origin)
+    end
   end
 end
 

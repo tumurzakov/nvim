@@ -58,13 +58,20 @@ return {
           end
           vim.cmd("DiffviewOpen -C" .. vim.fn.fnameescape(out[1]) .. " " .. git_base .. "...HEAD")
         end, opts("Diffview: vs " .. git_base))
-        -- жмём "T" => открыть shared-терминал и сделать cd в выбранную папку (файл => его каталог)
+        -- жмём "T" => открыть shared-терминал в выбранной папке, фокус остаётся в tree
         vim.keymap.set("n", "T", function()
           local node = api.tree.get_node_under_cursor()
           if node and node.absolute_path then
             require("config.shared_term").cd(node.absolute_path)
           end
-        end, opts("Terminal here (cd)"))
+        end, opts("Terminal here (keep focus)"))
+        -- "\T" => то же самое, но переключает фокус на терминал
+        vim.keymap.set("n", "<leader>T", function()
+          local node = api.tree.get_node_under_cursor()
+          if node and node.absolute_path then
+            require("config.shared_term").cd(node.absolute_path, { focus = true })
+          end
+        end, opts("Terminal here (focus term)"))
       end,
 
       -- остальная твоя конфигурация, если есть
