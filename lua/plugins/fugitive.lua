@@ -20,6 +20,7 @@ return {
     },
     opts = {
       enhanced_diff_hl = true,
+      default_args = { DiffviewFileHistory = {} },
       view = {
         default = { layout = "diff2_horizontal" },
         merge_tool = { layout = "diff3_mixed" },
@@ -27,6 +28,14 @@ return {
       file_panel = {
         listing_style = "tree",
         win_config = { width = 35 },
+      },
+      file_history_panel = {
+        log_options = {
+          git = {
+            single_file = { follow = false },
+            multi_file = {},
+          },
+        },
       },
     },
   },

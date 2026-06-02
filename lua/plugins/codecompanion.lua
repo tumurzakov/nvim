@@ -133,6 +133,13 @@ Rules:
               provider = "telescope",
             },
           },
+          ["diff"] = {
+            callback = "slash_commands.diff",
+            description = "Insert git diff (Diffview-aware, falls back to base..HEAD)",
+            opts = {
+              contains_code = true,
+            },
+          },
         },
         tools = {
           ["agenda"] = {

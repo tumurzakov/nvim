@@ -11,7 +11,8 @@ local help_text = [[
  \fg  Live grep   \rn Rename           \cc  Chat
  \fb  Buffers     \ca Code action      \cm  Commit message
  \fh  Help tags   \f  Format           \ca  Actions (visual)
- F9   Aerial
+ F9   Aerial                           \cq  Review Q (visual, Diffview-aware)
+                                       /diff in chat: insert git diff
 
  TERMINAL (C-b prefix)                 PYTHON & TESTING
  C-b n/p  Next/prev tab               \ta  Pytest all

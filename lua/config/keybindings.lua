@@ -9,8 +9,12 @@ local function feedkeys(keys)
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "n", false)
 end
 
+local function feedkeys_sync(keys)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "nx", false)
+end
+
 local function leave_visual_mode()
-  feedkeys("<Esc>")
+  feedkeys_sync("<Esc>")
 end
 
 local function leave_terminal_mode()
@@ -49,6 +53,74 @@ local function open_codecompanion_chat_with_selection()
   local cc = require("codecompanion")
   local chat = cc.chat({
     messages = selection and { { role = "user", content = selection } } or nil,
+    auto_submit = false,
+  })
+
+  vim.schedule(function()
+    if chat and chat.ui and chat.ui.win and vim.api.nvim_win_is_valid(chat.ui.win) then
+      vim.api.nvim_set_current_win(chat.ui.win)
+    end
+    vim.cmd("startinsert")
+  end)
+end
+
+local function open_codecompanion_chat_with_review_context()
+  local mode = vim.fn.mode()
+  if not mode:match("[vV\22]") then
+    vim.notify("Use \\cq in visual mode (e.g. in a Diffview pane)", vim.log.levels.WARN)
+    return
+  end
+  leave_visual_mode()
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local start_pos = vim.api.nvim_buf_get_mark(bufnr, "<")
+  local end_pos = vim.api.nvim_buf_get_mark(bufnr, ">")
+  local selection = get_visual_selection_from_marks() or ""
+
+  local rc = require("config.review_context")
+  local ctx = rc.diffview() or rc.fallback()
+  local path = (ctx and ctx.file) or vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ":.")
+
+  local parts = {}
+  if ctx then
+    table.insert(parts, string.format(
+      "Reviewing `%s` vs `%s` in repo `%s`.",
+      ctx.right_display, ctx.left_display, rc.repo_name(ctx.root)
+    ))
+    local subjects = rc.commit_subjects(ctx.root, ctx.left_sha, ctx.right_sha, 30)
+    local subjects_block = rc.format_subjects(subjects)
+    if subjects_block then
+      table.insert(parts, "")
+      table.insert(parts, string.format("Commits in this range (%d):", #subjects))
+      table.insert(parts, subjects_block)
+    end
+    table.insert(parts, "")
+    table.insert(parts, string.format("File: `%s`, lines %d-%d.", path, start_pos[1], end_pos[1]))
+
+    local diff = rc.diff(ctx.root, ctx.left_sha, ctx.right_sha, ctx.file, { right_is_local = ctx.right_is_local })
+    if diff and diff ~= "" then
+      table.insert(parts, "")
+      table.insert(parts, "Diff for this file:")
+      table.insert(parts, "```diff")
+      table.insert(parts, diff)
+      table.insert(parts, "```")
+    end
+  else
+    table.insert(parts, string.format("Reviewing `%s` lines %d-%d.", path, start_pos[1], end_pos[1]))
+  end
+
+  table.insert(parts, "")
+  table.insert(parts, string.format("My question is about lines %d-%d:", start_pos[1], end_pos[1]))
+  table.insert(parts, "```")
+  table.insert(parts, selection)
+  table.insert(parts, "```")
+  table.insert(parts, "")
+
+  local content = table.concat(parts, "\n")
+
+  local cc = require("codecompanion")
+  local chat = cc.chat({
+    messages = { { role = "user", content = content } },
     auto_submit = false,
   })
 
@@ -836,6 +908,7 @@ map("n", "<leader>fh", telescope_call("help_tags"), { desc = "Help tags (Telesco
 map({ "n", "v" }, "<C-l>", open_codecompanion_chat_with_selection, { desc = "CodeCompanion chat with selection" })
 map({ "n", "v" }, "<C-k>", cc_k.short_explain, { desc = "CodeCompanion short explain (K window)" })
 map("v", "<leader>ci", rewrite_visual_selection_with_codecompanion, { desc = "Rewrite selected text (CodeCompanion)" })
+map("v", "<leader>cq", open_codecompanion_chat_with_review_context, { desc = "CodeCompanion review question (Diffview-aware)" })
 map("n", "<leader>cc", "<cmd>CodeCompanionChat<CR>", { desc = "CodeCompanion chat" })
 map("n", "<A-l>", "<cmd>CodeCompanionChat Toggle<CR>", { desc = "Toggle CodeCompanion chat" })
 map("n", "¬", "<cmd>CodeCompanionChat Toggle<CR>", { desc = "Toggle CodeCompanion chat" })
