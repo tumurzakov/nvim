@@ -845,6 +845,8 @@ map("n", "<A-l>", "<cmd>CodeCompanionChat Toggle<CR>", { desc = "Toggle CodeComp
 map("n", "¬", "<cmd>CodeCompanionChat Toggle<CR>", { desc = "Toggle CodeCompanion chat" })
 map("n", "<leader>cm", "<cmd>CodeCompanion /commit<CR>", { desc = "CodeCompanion commit message" })
 map("v", "<leader>ca", "<cmd>CodeCompanionActions<CR>", { desc = "CodeCompanion actions" })
+map("n", "<leader>cr", function() require("config.diff_review").review() end, { desc = "DiffReview: AI review of diff (background)" })
+map("n", "<leader>cR", function() require("config.diff_review").clear() end,  { desc = "DiffReview: clear results" })
 
 -- Diagnostics
 vim.o.updatetime = 300

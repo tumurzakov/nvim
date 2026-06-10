@@ -31,6 +31,15 @@ local help_text = [[
  \gh  File history                     \gH  Branch history
  gd   File diff (in tree)              gB   Diff vs base branch (in tree)
 
+ \cr  DiffReview (background AI review → inline + quickfix)
+ \cR  DiffReview: clear
+
+ DIAGNOSTICS (Trouble)
+ \xx  Workspace diagnostics            \xs  Symbols
+ \xX  Buffer diagnostics               \xl  LSP refs/definitions
+ \xQ  Quickfix list                    \xL  Location list
+ [x / ]x  Prev / next item
+
  EDITING          COMPLETION (insert)  COMMANDS
  jk  Leave insert C-Space Trigger      :ReloadConfig
                   Enter   Confirm      :CC  CodeCompanion

@@ -51,6 +51,19 @@ M.codecompanion = {
   },
 }
 
+-- DiffReview (<leader>cr): AI background review of the current diff → quickfix.
+-- Default backend: `claude -p` (Claude CLI).
+-- Switch to local Ollama by pointing claude_command at the bundled agent script:
+-- M.diff_review = {
+--   claude_command = vim.fn.expand("~/.config/nvim/scripts/ollama-agent"),
+--   env = {
+--     OLLAMA_MODEL    = "qwen3-coder:30b",
+--     OLLAMA_ENDPOINT = "http://127.0.0.1:11434",
+--   },
+-- }
+-- Any other backend: write a script that reads stdin and streams to stdout,
+-- then point claude_command at it. The -p flag is passed and can be ignored.
+
 -- Base branch used by nvim-tree `gd` (diff vs base). Defaults to "main".
 -- M.git_base_branch = "develop"
 
