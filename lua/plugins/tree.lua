@@ -13,6 +13,7 @@ return {
       },
       git = {
         ignore = false,              -- также отключает глобальную фильтрацию gitignore
+        timeout = 5000,              -- default 400ms is too short and crashes utils.lua:15 with nil obj
       },
       on_attach = function(bufnr)
         local api = require("nvim-tree.api")
@@ -46,6 +47,28 @@ return {
           end
         end, opts("Diffview: file diff"))
         -- жмём "gB" => diffview против базовой ветки для репо под курсором
+        local function resolve_base(toplevel)
+          local function verify(ref)
+            vim.fn.systemlist({ "git", "-C", toplevel, "rev-parse", "--verify", "--quiet", ref })
+            return vim.v.shell_error == 0
+          end
+          local candidates = { git_base, "origin/" .. git_base }
+          for _, b in ipairs({ "main", "master", "develop" }) do
+            if b ~= git_base then
+              table.insert(candidates, b)
+              table.insert(candidates, "origin/" .. b)
+            end
+          end
+          for _, c in ipairs(candidates) do
+            if verify(c) then return c end
+          end
+          local out = vim.fn.systemlist({ "git", "-C", toplevel, "symbolic-ref", "--short", "refs/remotes/origin/HEAD" })
+          if vim.v.shell_error == 0 and out[1] and out[1] ~= "" then
+            return out[1]
+          end
+          return nil
+        end
+
         vim.keymap.set("n", "gB", function()
           local node = api.tree.get_node_under_cursor()
           if not (node and node.absolute_path) then return end
@@ -56,8 +79,16 @@ return {
             vim.notify("Not a git repo: " .. dir, vim.log.levels.WARN)
             return
           end
-          vim.cmd("DiffviewOpen -C" .. vim.fn.fnameescape(out[1]) .. " " .. git_base .. "...HEAD")
-        end, opts("Diffview: vs " .. git_base))
+          local toplevel = out[1]
+          local base = resolve_base(toplevel)
+          if not base then
+            vim.notify("No base branch found (tried " .. git_base .. ", main, master, develop, origin/HEAD)", vim.log.levels.WARN)
+            return
+          end
+          local branch_out = vim.fn.systemlist({ "git", "-C", toplevel, "symbolic-ref", "--short", "HEAD" })
+          local head_ref = (vim.v.shell_error == 0 and branch_out[1] and branch_out[1] ~= "") and branch_out[1] or "HEAD"
+          vim.cmd("DiffviewOpen -C" .. vim.fn.fnameescape(toplevel) .. " " .. base .. "..." .. head_ref)
+        end, opts("Diffview: vs base branch"))
         -- жмём "T" => открыть shared-терминал в выбранной папке, фокус остаётся в tree
         vim.keymap.set("n", "T", function()
           local node = api.tree.get_node_under_cursor()
