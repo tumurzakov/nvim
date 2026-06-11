@@ -10,23 +10,37 @@ local function feedkeys(keys)
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "n", false)
 end
 
-local function get_visual_selection_from_marks()
-  local bufnr = 0
-  local start_pos = vim.api.nvim_buf_get_mark(bufnr, "<")
-  local end_pos = vim.api.nvim_buf_get_mark(bufnr, ">")
+-- Read the live visual selection using the anchor (getpos "v") and cursor,
+-- NOT the stale '< '> marks which only update after leaving visual mode.
+-- Returns: text, start_line (1-based), end_line (1-based)
+local function get_live_visual_selection()
+  local mode = vim.fn.mode()
+  local anchor = vim.fn.getpos("v")
+  local cur = vim.fn.getpos(".")
+  -- getpos cols are 1-based
+  local a_line, a_col = anchor[2], anchor[3]
+  local c_line, c_col = cur[2], cur[3]
 
-  if start_pos[1] == 0 or end_pos[1] == 0 then
-    return nil
+  local start_line, start_col, end_line, end_col
+  if a_line < c_line or (a_line == c_line and a_col <= c_col) then
+    start_line, start_col = a_line, a_col
+    end_line,   end_col   = c_line, c_col
+  else
+    start_line, start_col = c_line, c_col
+    end_line,   end_col   = a_line, a_col
   end
 
-  local lines = vim.api.nvim_buf_get_lines(bufnr, start_pos[1] - 1, end_pos[1], false)
+  local lines = vim.api.nvim_buf_get_lines(0, start_line - 1, end_line, false)
   if vim.tbl_isempty(lines) then
-    return nil
+    return nil, start_line, end_line
   end
 
-  lines[#lines] = string.sub(lines[#lines], 1, end_pos[2] + 1)
-  lines[1] = string.sub(lines[1], start_pos[2] + 1)
-  return table.concat(lines, "\n")
+  if mode ~= "V" then
+    lines[#lines] = string.sub(lines[#lines], 1, end_col)
+    lines[1]      = string.sub(lines[1], start_col)
+  end
+
+  return table.concat(lines, "\n"), start_line, end_line
 end
 
 local function current_context()
@@ -65,16 +79,19 @@ local function format_diag(diag)
   return string.format("[%s] %s%s L%d: %s", severity_name(diag.severity), src, code, line, diag.message or "")
 end
 
-local function get_diagnostics_for_context()
+-- sel_start / sel_end: live 1-based line numbers captured before leaving visual mode
+local function get_diagnostics_for_context(sel_start, sel_end)
   local mode = vim.fn.mode()
   local has_selection = mode:match("[vV\22]") ~= nil
   local diags
 
-  if has_selection then
-    local start_pos = vim.api.nvim_buf_get_mark(0, "<")
-    local end_pos = vim.api.nvim_buf_get_mark(0, ">")
-    local start_line = math.min(start_pos[1], end_pos[1]) - 1
-    local end_line = math.max(start_pos[1], end_pos[1]) - 1
+  if has_selection and sel_start then
+    diags = vim.diagnostic.get(0, { lnum = sel_start - 1, end_lnum = sel_end })
+  elseif has_selection then
+    local anchor = vim.fn.getpos("v")
+    local cur    = vim.fn.getpos(".")
+    local start_line = math.min(anchor[2], cur[2]) - 1
+    local end_line   = math.max(anchor[2], cur[2]) - 1
     diags = vim.diagnostic.get(0, { lnum = start_line, end_lnum = end_line + 1 })
   else
     local line = vim.api.nvim_win_get_cursor(0)[1] - 1
@@ -106,8 +123,14 @@ function M.short_explain()
   local ctx = current_context()
   local mode = vim.fn.mode()
   local has_selection = mode:match("[vV\22]") ~= nil
-  local selection = has_selection and get_visual_selection_from_marks() or nil
-  local diags = get_diagnostics_for_context()
+
+  -- Capture selection via live positions BEFORE exiting visual mode.
+  -- The '< '> marks are stale until after Escape is processed.
+  local selection, sel_start, sel_end
+  if has_selection then
+    selection, sel_start, sel_end = get_live_visual_selection()
+  end
+  local diags = get_diagnostics_for_context(sel_start, sel_end)
 
   if has_selection then
     feedkeys("<Esc>")
@@ -142,6 +165,7 @@ function M.short_explain()
 
   local chat = codecompanion.chat({
     auto_submit = true,
+    stop_context_insertion = true,
     messages = {
       { role = "user", content = prompt },
     },

@@ -52,20 +52,55 @@ M.codecompanion = {
 }
 
 -- DiffReview (<leader>cr): AI background review of the current diff → quickfix.
--- Default backend: `claude -p` (Claude CLI).
--- Switch to local Ollama by pointing claude_command at the bundled agent script:
+-- Files are reviewed automatically when opened in diffview and cached for the
+-- session. U in the diffview panel clears the cache so files get re-reviewed.
+-- Set auto_review = false to disable the automatic trigger.
 -- M.diff_review = {
---   claude_command = vim.fn.expand("~/.config/nvim/scripts/ollama-agent"),
---   env = {
---     OLLAMA_MODEL    = "qwen3-coder:30b",
---     OLLAMA_ENDPOINT = "http://127.0.0.1:11434",
---   },
+--   claude_command = "/usr/local/bin/claude",   -- defaults to `claude` on PATH
+--   model          = "claude-haiku-4-5-20251001",
+--   auto_review    = true,                       -- auto-review on WinEnter in diffview
+--   debug          = false,                      -- opens a raw-stdout split
+--
+--   -- Switch to local Ollama:
+--   -- claude_command = vim.fn.expand("~/.config/nvim/scripts/ollama-agent"),
+--   -- env = { OLLAMA_MODEL = "qwen3-coder:30b" },
 -- }
--- Any other backend: write a script that reads stdin and streams to stdout,
--- then point claude_command at it. The -p flag is passed and can be ignored.
+-- Any backend: write a script that reads stdin and streams to stdout;
+-- point claude_command at it. The -p flag is passed and can be ignored.
 
 -- Base branch used by nvim-tree `gd` (diff vs base). Defaults to "main".
 -- M.git_base_branch = "develop"
+
+-- Review view (nvim-tree `gR`): red/green patch view of <base>...HEAD with a
+-- file sidebar. Selecting a file (⏎) shows its unified diff and runs ALL the
+-- checkers below asynchronously; `r` re-runs them. Each checker must print lines
+-- of the form `LOC: <file>:<line> <message>` on stdout — they are mapped onto the
+-- rows of the diff buffer and merged into one quickfix list (navigate with ]q/[q).
+--
+-- Each checker:
+--   name   label shown in findings (prefixed as "[name] ...")
+--   cmd    argv table; ${file} = absolute path, ${path} = repo-relative path
+--   input  what is piped to stdin: "prompt" (AI review prompt + diff),
+--          "diff" (raw unified diff), or "none" (default "prompt")
+--   env    optional extra environment variables
+--
+-- If omitted, a single "ai" checker is built from M.diff_review (claude_command/
+-- model/env) using input="prompt".
+-- M.review_view = {
+--   checkers = {
+--     -- AI agent review of the diff
+--     {
+--       name  = "ai",
+--       cmd   = { vim.fn.expand("~/.local/bin/claude"), "-p", "--no-session-persistence" },
+--       input = "prompt",
+--       env   = { CLAUDECODE = "" },
+--     },
+--     -- A linter wrapper that takes the file path and prints LOC: lines
+--     -- { name = "ruff", cmd = { vim.fn.expand("~/.config/nvim/scripts/ruff-loc"), "${file}" }, input = "none" },
+--     -- A tool that reads the unified diff on stdin
+--     -- { name = "diffcheck", cmd = { "my-diff-checker" }, input = "diff" },
+--   },
+-- }
 
 -- Agenda builder: web pages to scrape for context. Each entry is { name, url }.
 -- Add your own corporate dashboards, profile pages, etc. URLs may contain

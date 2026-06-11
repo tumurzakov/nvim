@@ -89,6 +89,13 @@ return {
           local head_ref = (vim.v.shell_error == 0 and branch_out[1] and branch_out[1] ~= "") and branch_out[1] or "HEAD"
           vim.cmd("DiffviewOpen -C" .. vim.fn.fnameescape(toplevel) .. " " .. base .. "..." .. head_ref)
         end, opts("Diffview: vs base branch"))
+        -- жмём "gR" => red/green patch-review view (feature vs base) с in-buffer quickfix
+        vim.keymap.set("n", "gR", function()
+          local node = api.tree.get_node_under_cursor()
+          if node and node.absolute_path then
+            require("config.review_view").open_from_node(node)
+          end
+        end, opts("Review: feature vs base (red/green)"))
         -- жмём "T" => открыть shared-терминал в выбранной папке, фокус остаётся в tree
         vim.keymap.set("n", "T", function()
           local node = api.tree.get_node_under_cursor()

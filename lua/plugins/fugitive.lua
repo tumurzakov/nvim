@@ -16,7 +16,10 @@ return {
       { "<leader>gd", "<cmd>DiffviewOpen<cr>", desc = "Diffview: all changes" },
       { "<leader>gh", "<cmd>DiffviewFileHistory %<cr>", desc = "Diffview: file history" },
       { "<leader>gH", "<cmd>DiffviewFileHistory<cr>", desc = "Diffview: branch history" },
-      { "<leader>gc", "<cmd>DiffviewClose<cr>", desc = "Diffview: close" },
+      { "<leader>gc", function()
+        -- Close the red/green review view if it's open, else close diffview.
+        if not require("config.review_view").close() then vim.cmd("DiffviewClose") end
+      end, desc = "Close review view / diffview" },
     },
     opts = {
       enhanced_diff_hl = true,

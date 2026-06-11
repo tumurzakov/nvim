@@ -27,12 +27,13 @@ local help_text = [[
                   \sq  Stop speaking
 
  GIT (Diffview)
- \gd  All changes (diffview)           \gc  Close diffview
+ \gd  All changes (diffview)           \gc  Close review view / diffview
  \gh  File history                     \gH  Branch history
  gd   File diff (in tree)              gB   Diff vs base branch (in tree)
+ gR   Patch review (red/green; r=review ]q/[q=nav Tab=fold zM/zR=all)
 
- \cr  DiffReview (background AI review → inline + quickfix)
- \cR  DiffReview: clear
+ \cr  DiffReview (AI review → inline + quickfix; auto on file open)
+ \cR  DiffReview: clear all     \xQ  Browse issues (quickfix)
 
  DIAGNOSTICS (Trouble)
  \xx  Workspace diagnostics            \xs  Symbols
