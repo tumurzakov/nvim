@@ -848,6 +848,15 @@ map("v", "<leader>ca", "<cmd>CodeCompanionActions<CR>", { desc = "CodeCompanion 
 map("n", "<leader>cr", function() require("config.diff_review").review() end, { desc = "DiffReview: AI review of diff (background)" })
 map("n", "<leader>cR", function() require("config.diff_review").clear() end,  { desc = "DiffReview: clear results" })
 
+-- Kitty drop: send text into the tagged Claude Code kitty window
+map("v", "<leader>kd", function()
+  -- leave visual mode so '< / '> marks are committed, then send
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
+  require("config.kitty_drop").send_visual()
+end, { desc = "Kitty drop: send selection to Claude tab" })
+map("n", "<leader>kd", function() require("config.kitty_drop").send_lineref() end, { desc = "Kitty drop: send file:line to Claude tab" })
+map("n", "<leader>kf", function() require("config.kitty_drop").send_path() end, { desc = "Kitty drop: send file path to Claude tab" })
+
 -- Diagnostics
 vim.o.updatetime = 300
 vim.api.nvim_create_autocmd("CursorHold", { callback = open_diagnostics_float })

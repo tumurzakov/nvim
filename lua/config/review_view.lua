@@ -333,11 +333,15 @@ local function run_checkers(st, entry, opts)
   if not entry then return end
   opts = opts or {}
   local path = entry.path
-  if st.inflight[path] and not opts.force then return end
-  if st.done[path] and not opts.force then return end
 
+  -- Always switch the diff pane to the selected file.
   local buf, diff, linemap = ensure_file_buf(st, entry)
   show_file(st, entry)
+
+  -- Only the checker run is guarded: skip if already running or already done
+  -- (unless forced via `r`). The view still switched above.
+  if st.inflight[path] then return end
+  if st.done[path] and not opts.force then return end
 
   -- drop any previous items for this file (re-run / refresh)
   st.items = vim.tbl_filter(function(it) return it._file ~= path end, st.items)
@@ -565,6 +569,35 @@ function M.open(path)
     vim.api.nvim_set_current_win(S.sidebar_win)
     pcall(vim.api.nvim_win_set_cursor, S.sidebar_win, { 4, 0 })
   end
+end
+
+-- Repo-relative path of the file whose diff buffer is `bufnr`, or nil.
+function M.file_for(bufnr)
+  if not S then return nil end
+  for path, b in pairs(S.file_bufs or {}) do
+    if b == bufnr then return path end
+  end
+  return nil
+end
+
+-- Describe a diff-buffer row range for external consumers (e.g. kitty_drop):
+-- maps the selected rows back to SOURCE line numbers via the file's line map.
+-- Returns { file = relpath, l1 = srcStart, l2 = srcEnd, lines = {selected diff lines} }
+-- or nil if `bufnr` is not one of our diff buffers.
+function M.context_for(bufnr, r1, r2)
+  local path = M.file_for(bufnr)
+  if not path then return nil end
+  if r1 > r2 then r1, r2 = r2, r1 end
+  local linemap = (S.linemaps or {})[path] or {}
+  local lo, hi
+  for src, row in pairs(linemap) do
+    if row >= r1 and row <= r2 then
+      lo = (not lo or src < lo) and src or lo
+      hi = (not hi or src > hi) and src or hi
+    end
+  end
+  local lines = vim.api.nvim_buf_get_lines(bufnr, r1 - 1, r2, false)
+  return { file = path, l1 = lo, l2 = hi, lines = lines }
 end
 
 -- nvim-tree entry point: open for the node under the cursor.

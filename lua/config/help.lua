@@ -31,6 +31,7 @@ local help_text = [[
  \gh  File history                     \gH  Branch history
  gd   File diff (in tree)              gB   Diff vs base branch (in tree)
  gR   Patch review (red/green; r=review ]q/[q=nav Tab=fold zM/zR=all)
+ \kd  Drop sel/file:line → Claude kitty tab   \kf  Drop file path
 
  \cr  DiffReview (AI review → inline + quickfix; auto on file open)
  \cR  DiffReview: clear all     \xQ  Browse issues (quickfix)

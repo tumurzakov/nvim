@@ -102,6 +102,17 @@ M.codecompanion = {
 --   },
 -- }
 
+-- Kitty drop (<leader>kd / <leader>kf): send text from nvim into another kitty
+-- window — the Claude Code TUI in a separate tab. Requires kitty started with
+-- `allow_remote_control yes` + `listen_on unix:...` (so KITTY_LISTEN_ON is set).
+-- The destination is the window whose window- or tab-title contains the marker
+-- `[kd]` — put that marker in the title of the tab you want drops to land in
+-- (e.g. kitty's "set tab title" / set-tab-title). Customise below if needed.
+-- M.kitty_drop = {
+--   marker = "[kd]",          -- substring looked for in window/tab titles
+--   -- match  = "cmdline:claude",  -- OR pin a full kitty --match expr (overrides marker)
+-- }
+
 -- Agenda builder: web pages to scrape for context. Each entry is { name, url }.
 -- Add your own corporate dashboards, profile pages, etc. URLs may contain
 -- personal IDs — keep this file git-ignored.
