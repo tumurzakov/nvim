@@ -135,22 +135,21 @@ function M.send_visual()
 
   local rv = review_view()
   local ctx = rv and rv.context_for and rv.context_for(buf, l1, l2) or nil
-  local body
+  local file, lines, ft, lo, hi
   if ctx then
-    local range = (ctx.l1 and ctx.l2) and (" (lines %d-%d)"):format(ctx.l1, ctx.l2) or ""
-    body = table.concat({
-      ("In `%s`%s — from the review diff:"):format(ctx.file, range),
-      "```diff", table.concat(ctx.lines, "\n"), "```", "",
-    }, "\n")
+    -- selection in a gR review buffer → real file path + source line range
+    file, lines, ft = ctx.file, ctx.lines, (ctx.ft ~= "" and ctx.ft or "")
+    lo, hi = ctx.l1 or l1, ctx.l2 or l2
   else
-    local lines = vim.api.nvim_buf_get_lines(buf, l1 - 1, l2, false)
-    local p = relpath(buf) or "selection"
-    local ft = vim.bo.filetype ~= "" and vim.bo.filetype or ""
-    body = table.concat({
-      ("In `%s` (lines %d-%d):"):format(p, l1, l2),
-      "```" .. ft, table.concat(lines, "\n"), "```", "",
-    }, "\n")
+    file = relpath(buf) or "selection"
+    lines = vim.api.nvim_buf_get_lines(buf, l1 - 1, l2, false)
+    ft = vim.bo.filetype ~= "" and vim.bo.filetype or ""
+    lo, hi = l1, l2
   end
+  local body = table.concat({
+    ("In `%s` (lines %d-%d):"):format(file, lo, hi),
+    "```" .. ft, table.concat(lines, "\n"), "```", "",
+  }, "\n")
   M.send(body)
 end
 

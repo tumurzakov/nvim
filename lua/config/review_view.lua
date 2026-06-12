@@ -28,9 +28,11 @@ local function ensure_hl()
   local dark = vim.o.background == "dark"
   vim.api.nvim_set_hl(0, "ReviewViewAddLine", { bg = dark and "#16291d" or "#e6ffec" })
   vim.api.nvim_set_hl(0, "ReviewViewDelLine", { bg = dark and "#33181b" or "#ffebe9" })
+  vim.api.nvim_set_hl(0, "ReviewViewChangeLine", { bg = dark and "#33301a" or "#fff5b1" })
   vim.api.nvim_set_hl(0, "ReviewViewDir", { link = "Directory" })
   vim.api.nvim_set_hl(0, "ReviewViewAdd", { link = "diffAdded" })
   vim.api.nvim_set_hl(0, "ReviewViewDel", { link = "diffRemoved" })
+  vim.api.nvim_set_hl(0, "ReviewViewDirty", { link = "DiagnosticWarn" })
 end
 ensure_hl()
 vim.api.nvim_create_autocmd("ColorScheme", {
@@ -42,6 +44,9 @@ local REVIEW_PROMPT = [[Review this diff for bugs, type errors, logic errors, se
 Also check comments: flag any that are inaccurate or misleading about what the code actually does,
 contain outdated history or change-log notes that belong in git commit messages instead,
 or describe unrelated concerns irrelevant to the surrounding block.
+Each added/context line in the diff is prefixed with its line number and a TAB
+(e.g. "188\t+ ..."). Use that exact prefixed number as <line_number> — do not
+count lines yourself. Only report on lines that have a number.
 For each issue output exactly ONE line:
 LOC: <file_path>:<line_number> <brief description>
 After all issues: one-sentence summary. No other text.]]
@@ -80,22 +85,50 @@ local function resolve_base(root)
   return nil, git_base
 end
 
--- Build the changed-file list from numstat (adds, dels, path) over <base>...HEAD.
-local function collect_files(root, base, head)
-  local ok, out = git(root, { "diff", "--numstat", base .. "..." .. head })
-  if not ok then return {} end
-  local files = {}
-  for _, line in ipairs(out) do
-    local adds, dels, path = line:match("^(%S+)\t(%S+)\t(.+)$")
-    if path then
-      -- renames render as "old => new" or "{a => b}/x"; keep the raw string for display
-      local binary = (adds == "-" or dels == "-")
-      table.insert(files, {
-        path = path,
-        adds = binary and 0 or tonumber(adds) or 0,
-        dels = binary and 0 or tonumber(dels) or 0,
-        binary = binary,
-      })
+-- A set of path names from a `git` name-only command.
+local function name_set(root, args)
+  local ok, out = git(root, args)
+  local s = {}
+  if ok then for _, l in ipairs(out) do if l ~= "" then s[l] = true end end end
+  return s
+end
+
+-- Build the changed-file list over <merge_base>..WORKING-TREE — i.e. committed
+-- feature changes AND uncommitted edits — plus untracked files. Each entry is
+-- tagged committed / dirty / untracked so the sidebar can differentiate.
+local function collect_files(root, base, merge_base, head)
+  -- which files have committed changes (base...HEAD) vs uncommitted (vs HEAD)
+  local committed = name_set(root, { "diff", "--name-only", base .. "..." .. head })
+  local dirty     = name_set(root, { "diff", "--name-only", "HEAD" })
+
+  local files, seen = {}, {}
+  -- numstat of merge_base..working-tree: tracked changes, committed + uncommitted
+  local ok, out = git(root, { "diff", "--numstat", merge_base })
+  if ok then
+    for _, line in ipairs(out) do
+      local adds, dels, path = line:match("^(%S+)\t(%S+)\t(.+)$")
+      if path then
+        local binary = (adds == "-" or dels == "-")
+        files[#files + 1] = {
+          path = path,
+          adds = binary and 0 or tonumber(adds) or 0,
+          dels = binary and 0 or tonumber(dels) or 0,
+          binary = binary,
+          committed = committed[path] or false,
+          dirty = dirty[path] or false,
+        }
+        seen[path] = true
+      end
+    end
+  end
+  -- untracked files (new, not yet added) — all-added when shown
+  local uok, uout = git(root, { "ls-files", "--others", "--exclude-standard" })
+  if uok then
+    for _, path in ipairs(uout) do
+      if path ~= "" and not seen[path] then
+        files[#files + 1] = { path = path, adds = 0, dels = 0, untracked = true, dirty = true }
+        seen[path] = true
+      end
     end
   end
   table.sort(files, function(a, b) return a.path < b.path end)
@@ -125,8 +158,9 @@ local function render_sidebar(buf, st)
   local dir_index = {}    -- row -> dir name (header rows)
   local hi = {}           -- { row, kind, [col_a, col_b] } highlight ops
 
-  table.insert(lines, ("%s ...%s  (%d files)"):format(st.base, st.head_ref, #st.files))
-  table.insert(lines, "r=review ⏎=open Tab=fold zM/zR=all q=close")
+  table.insert(lines, ("%s → working tree  (%d files)"):format(st.base, #st.files))
+  table.insert(lines, "● uncommitted   + new   (blank = committed)")
+  table.insert(lines, "r=review R=reload C=chat ⏎=open Tab=fold q=close")
   table.insert(lines, "")
 
   -- group by directory
@@ -149,10 +183,18 @@ local function render_sidebar(buf, st)
       for _, f in ipairs(groups[dir]) do
         local name = vim.fn.fnamemodify(f.path, ":t")
         local counts = f.binary and "bin" or ("+%d -%d"):format(f.adds, f.dels)
-        local row_text = string.rep(" ", indent) .. fit(name, namew) .. " "
+        -- status marker: + new (untracked), ● uncommitted (dirty), blank = committed
+        local mk, mk_hl = " ", nil
+        if f.untracked then mk, mk_hl = "+", "ReviewViewAdd"
+        elseif f.dirty then mk, mk_hl = "●", "ReviewViewDirty" end
+        local prefix = "  " .. mk .. " "   -- 2 spaces + marker + space = same width as indent(4)
+        local row_text = prefix .. fit(name, namew) .. " "
           .. string.rep(" ", math.max(0, countw - #counts)) .. counts
         table.insert(lines, row_text)
         line_index[#lines] = f
+        if mk_hl then
+          table.insert(hi, { row = #lines - 1, kind = "mark", a = 2, b = 2 + #mk, hl = mk_hl })
+        end
         -- color the counts (split into +adds / -dels for green/red)
         local cstart = #row_text - #counts
         local plus = counts:match("^(%+%d+)")
@@ -177,6 +219,8 @@ local function render_sidebar(buf, st)
       vim.api.nvim_buf_set_extmark(buf, SIDE_NS, h.row, h.a, { end_col = h.b, hl_group = "ReviewViewAdd" })
     elseif h.kind == "del" then
       vim.api.nvim_buf_set_extmark(buf, SIDE_NS, h.row, h.a, { end_col = h.b, hl_group = "ReviewViewDel" })
+    elseif h.kind == "mark" then
+      vim.api.nvim_buf_set_extmark(buf, SIDE_NS, h.row, h.a, { end_col = h.b, hl_group = h.hl })
     end
   end
 
@@ -196,8 +240,14 @@ end
 -- Quickfix-navigation keymaps for the diff / placeholder buffers.
 local function setup_diff_keymaps(buf)
   local o = { buffer = buf, nowait = true, silent = true }
-  vim.keymap.set("n", "]q", "<cmd>cnext<cr>", o)
-  vim.keymap.set("n", "[q", "<cmd>cprev<cr>", o)
+  vim.keymap.set("n", "]q", function() M.qf_next() end, o)
+  vim.keymap.set("n", "[q", function() M.qf_prev() end, o)
+  vim.keymap.set("n", "R", function() M.refresh() end, o)
+  vim.keymap.set("n", "C", function() M.codecompanion() end, o)
+  vim.keymap.set("x", "C", function()
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
+    M.codecompanion({ visual = true })
+  end, o)
   vim.keymap.set("n", "q", function() M.close() end, o)
 end
 
@@ -211,8 +261,62 @@ local function map_line(linemap, lnum)
   return best_row or 1
 end
 
--- Build (and cache) the red/green diff buffer for one file, plus its line map.
--- Returns bufnr, diff_text, linemap.
+-- Annotate a unified diff with new-file line numbers (added/context lines get an
+-- "N<TAB>" prefix) so an LLM checker copies the number instead of counting lines.
+local function numbered_diff(diff)
+  local out, newln = {}, nil
+  for _, line in ipairs(vim.split(diff, "\n", { plain = true })) do
+    local h = line:match("^@@ %-%d+,?%d* %+(%d+)")
+    if h then
+      newln = tonumber(h); out[#out + 1] = line
+    elseif newln and not line:match("^%+%+%+") and not line:match("^%-%-%-")
+        and (line:sub(1, 1) == "+" or line:sub(1, 1) == " ") then
+      out[#out + 1] = ("%d\t%s"):format(newln, line); newln = newln + 1
+    else
+      out[#out + 1] = line
+    end
+  end
+  return table.concat(out, "\n")
+end
+
+-- Classify per-line diff status of the working-tree version of `path` (via -U0):
+--   added[n]=true (green), changed[n]=true (yellow)  — n is a new-file line,
+--   dels = { { line=n, above=bool, lines={removed text} } }  (red, shown as virt lines)
+local function diff_status(root, merge_base, path)
+  local added, changed, dels = {}, {}, {}
+  local dl = vim.fn.systemlist({ "git", "-C", root, "diff", "-U0", merge_base, "--", path })
+  local i = 1
+  while i <= #dl do
+    local nl, nc = dl[i]:match("^@@ %-%d+,?%d* %+(%d+),?(%d*) @@")
+    if nl then
+      nl, nc = tonumber(nl), (nc == "" and 1 or tonumber(nc))
+      local removed, j, adds = {}, i + 1, 0
+      while j <= #dl and not dl[j]:match("^@@") do
+        local c = dl[j]:sub(1, 1)
+        if c == "-" then removed[#removed + 1] = dl[j]:sub(2)
+        elseif c == "+" then adds = adds + 1 end
+        j = j + 1
+      end
+      if #removed == 0 then
+        for k = 0, nc - 1 do added[nl + k] = true end
+      elseif nc == 0 then
+        dels[#dels + 1] = { line = nl, above = false, lines = removed }   -- pure deletion
+      else
+        for k = 0, nc - 1 do changed[nl + k] = true end
+        dels[#dels + 1] = { line = nl, above = true, lines = removed }    -- replacement
+      end
+      i = j
+    else
+      i = i + 1
+    end
+  end
+  return added, changed, dels
+end
+
+-- Build (and cache) the review buffer for one file. Default: the WHOLE file with
+-- the diff painted over it (green added, yellow changed, red deleted as virtual
+-- lines) and real syntax highlighting; buffer row == source line. Deleted/binary
+-- files fall back to a unified-diff buffer. Returns bufnr, diff_text, linemap.
 local function ensure_file_buf(st, entry)
   local path = entry.path
   local cached = st.file_bufs[path]
@@ -221,43 +325,83 @@ local function ensure_file_buf(st, entry)
   end
 
   local rc = require("config.review_context")
-  local diff = rc.diff(st.root, st.merge_base, "HEAD", path, {}) or ""
-  if vim.trim(diff) == "" then diff = "(no diff for " .. path .. ")" end
-  local diff_lines = vim.split(diff, "\n", { plain = true })
+  local abspath = st.root .. "/" .. path
 
-  -- new-file-line -> row map
-  local linemap, newln = {}, nil
-  for i, line in ipairs(diff_lines) do
-    local hh = line:match("^@@ %-%d+,?%d* %+(%d+)")
-    if hh then
-      newln = tonumber(hh)
-    elseif newln then
-      local c = line:sub(1, 1)
-      if line:match("^%+%+%+") or line:match("^%-%-%-") then
-        -- file header inside diff; ignore
-      elseif c == "+" or c == " " then
-        linemap[newln] = i; newln = newln + 1
-      end
-    end
+  -- the real unified diff is kept for the checker prompt regardless of how we render
+  local diff
+  if entry.untracked then
+    diff = table.concat(vim.fn.systemlist({
+      "git", "-C", st.root, "diff", "--no-index", "--", "/dev/null", path,
+    }), "\n")
+  else
+    diff = rc.diff(st.root, st.merge_base, nil, path, { right_is_local = true }) or ""
   end
 
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].swapfile = false
   vim.bo[buf].bufhidden = "hide"
-  vim.bo[buf].filetype = "diff"
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, diff_lines)
-  vim.bo[buf].modifiable = false
 
-  -- light red/green line backgrounds
-  for i, line in ipairs(diff_lines) do
-    local c = line:sub(1, 1)
-    if line:match("^%+%+%+") or line:match("^%-%-%-") then
-      -- header, no bg
-    elseif c == "+" then
-      vim.api.nvim_buf_set_extmark(buf, HL_NS, i - 1, 0, { line_hl_group = "ReviewViewAddLine" })
-    elseif c == "-" then
-      vim.api.nvim_buf_set_extmark(buf, HL_NS, i - 1, 0, { line_hl_group = "ReviewViewDelLine" })
+  local linemap = {}
+  local readable = vim.fn.filereadable(abspath) == 1 and not entry.binary
+
+  if readable then
+    -- FULL FILE + diff overlay
+    local content = vim.fn.readfile(abspath)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, content)
+    local ft = vim.filetype.match({ filename = abspath, buf = buf }) or ""
+    if ft ~= "" then vim.bo[buf].filetype = ft end
+    vim.bo[buf].modifiable = false
+
+    for n = 1, #content do linemap[n] = n end   -- identity: row == source line
+
+    local added, changed, dels
+    if entry.untracked then
+      added, changed, dels = {}, {}, {}
+      for n = 1, #content do added[n] = true end
+    else
+      added, changed, dels = diff_status(st.root, st.merge_base, path)
+    end
+    for n in pairs(added) do
+      if n >= 1 and n <= #content then
+        vim.api.nvim_buf_set_extmark(buf, HL_NS, n - 1, 0, { line_hl_group = "ReviewViewAddLine" })
+      end
+    end
+    for n in pairs(changed) do
+      if n >= 1 and n <= #content then
+        vim.api.nvim_buf_set_extmark(buf, HL_NS, n - 1, 0, { line_hl_group = "ReviewViewChangeLine" })
+      end
+    end
+    for _, d in ipairs(dels) do
+      local virt = {}
+      for _, rl in ipairs(d.lines) do virt[#virt + 1] = { { "- " .. rl, "ReviewViewDelLine" } } end
+      local above = d.above or d.line == 0
+      local row = math.max(0, (d.line == 0 and 1 or d.line) - 1)
+      vim.api.nvim_buf_set_extmark(buf, HL_NS, row, 0, { virt_lines = virt, virt_lines_above = above })
+    end
+  else
+    -- FALLBACK: deleted/binary/unreadable → unified-diff buffer (hunk view)
+    local dtext = (vim.trim(diff) ~= "" and diff) or ("(no preview for " .. path .. ")")
+    local dlines = vim.split(dtext, "\n", { plain = true })
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, dlines)
+    vim.bo[buf].filetype = "diff"
+    vim.bo[buf].modifiable = false
+    local newln
+    for i, line in ipairs(dlines) do
+      local hh = line:match("^@@ %-%d+,?%d* %+(%d+)")
+      if hh then newln = tonumber(hh)
+      elseif newln then
+        local c = line:sub(1, 1)
+        if line:match("^%+%+%+") or line:match("^%-%-%-") then
+        elseif c == "+" or c == " " then linemap[newln] = i; newln = newln + 1 end
+      end
+    end
+    for i, line in ipairs(dlines) do
+      local c = line:sub(1, 1)
+      if line:match("^%+%+%+") or line:match("^%-%-%-") then
+      elseif c == "+" then vim.api.nvim_buf_set_extmark(buf, HL_NS, i - 1, 0, { line_hl_group = "ReviewViewAddLine" })
+      elseif c == "-" then vim.api.nvim_buf_set_extmark(buf, HL_NS, i - 1, 0, { line_hl_group = "ReviewViewDelLine" })
+      end
     end
   end
 
@@ -301,9 +445,16 @@ end
 
 -- Rebuild quickfix + per-buffer diagnostics from the accumulated item list.
 local function publish(st)
-  vim.fn.setqflist({}, "r", { title = "Review checkers", items = st.items })
-  local by_buf = {}
+  if st ~= S then return end   -- view was closed / replaced: ignore late callbacks
+  -- drop items whose buffer was wiped (e.g. closed mid-check) to avoid E92
+  local items = {}
   for _, it in ipairs(st.items) do
+    if it.bufnr and vim.api.nvim_buf_is_valid(it.bufnr) then items[#items + 1] = it end
+  end
+  st.items = items
+  vim.fn.setqflist({}, "r", { title = "Review checkers", items = items })
+  local by_buf = {}
+  for _, it in ipairs(items) do
     by_buf[it.bufnr] = by_buf[it.bufnr] or {}
     table.insert(by_buf[it.bufnr], {
       lnum = it.lnum - 1, col = 0, message = it.text,
@@ -315,6 +466,41 @@ local function publish(st)
   for buf, diags in pairs(by_buf) do
     if vim.api.nvim_buf_is_valid(buf) then vim.diagnostic.set(NS, buf, diags) end
   end
+end
+
+-- Quickfix navigation that stays INSIDE the review diff window (never splits).
+local function qf_show(idx)
+  local all = vim.fn.getqflist()
+  if #all == 0 then return end
+  idx = math.max(1, math.min(idx, #all))
+  vim.fn.setqflist({}, "r", { idx = idx })   -- move the current marker, keep items
+  local it = all[idx]
+  if not (it and it.bufnr and it.bufnr > 0) then return end
+  if not (S and vim.api.nvim_win_is_valid(S.diff_win)) then return end
+  vim.api.nvim_win_set_buf(S.diff_win, it.bufnr)
+  vim.api.nvim_set_current_win(S.diff_win)
+  pcall(vim.api.nvim_win_set_cursor, S.diff_win, { it.lnum > 0 and it.lnum or 1, 0 })
+end
+
+function M.qf_jump() qf_show(vim.fn.line(".")) end                              -- from qf win: line == index
+function M.qf_next() qf_show((vim.fn.getqflist({ idx = 0 }).idx or 0) + 1) end
+function M.qf_prev() qf_show((vim.fn.getqflist({ idx = 0 }).idx or 0) - 1) end
+
+-- Open the quickfix window at the bottom without stealing focus, and route <CR>
+-- in it to the review diff window (so selecting a finding never opens a split).
+local function ensure_qf_open()
+  local qf_win
+  for _, w in ipairs(vim.fn.getwininfo()) do
+    if w.quickfix == 1 and w.loclist == 0 then qf_win = w.winid end
+  end
+  if not qf_win then
+    local cur = vim.api.nvim_get_current_win()
+    vim.cmd("botright copen")
+    qf_win = vim.api.nvim_get_current_win()
+    if vim.api.nvim_win_is_valid(cur) then pcall(vim.api.nvim_set_current_win, cur) end
+  end
+  local qbuf = vim.api.nvim_win_get_buf(qf_win)
+  vim.keymap.set("n", "<CR>", function() M.qf_jump() end, { buffer = qbuf, nowait = true, silent = true })
 end
 
 -- Substitute ${file} / ${path} placeholders in a checker's argv.
@@ -358,7 +544,8 @@ local function run_checkers(st, entry, opts)
   local pparts = { REVIEW_PROMPT, "" }
   if subjects then table.insert(pparts, "Commits:"); table.insert(pparts, subjects); table.insert(pparts, "") end
   table.insert(pparts, "File: " .. path); table.insert(pparts, "")
-  table.insert(pparts, "```diff"); table.insert(pparts, pdiff); table.insert(pparts, "```")
+  table.insert(pparts, "Diff (added/context lines prefixed with `<line-number><TAB>`):")
+  table.insert(pparts, "```"); table.insert(pparts, numbered_diff(pdiff)); table.insert(pparts, "```")
   local prompt = table.concat(pparts, "\n")
 
   local abspath = st.root .. "/" .. path
@@ -385,8 +572,10 @@ local function run_checkers(st, entry, opts)
         env = chk.env,
         stdin = stdin,
         on_line = function(line)
+          if st ~= S then return end   -- view closed/replaced
           local _, lnum, msg = line:match("^LOC:%s*([^:]+):(%d+)%s+(.+)")
           if not (lnum and msg) then return end
+          if not vim.api.nvim_buf_is_valid(buf) then return end
           local row = map_line(linemap, tonumber(lnum))
           table.insert(st.items, {
             bufnr = buf, lnum = row, col = 1,
@@ -397,6 +586,7 @@ local function run_checkers(st, entry, opts)
         end,
         on_exit = function(code, stderr)
           vim.schedule(function()
+            if st ~= S then return end   -- view closed/replaced: drop late results
             pending = pending - 1
             st.inflight[path] = pending
             if code ~= 0 and stderr ~= "" then
@@ -410,8 +600,8 @@ local function run_checkers(st, entry, opts)
               local n = 0
               for _, it in ipairs(st.items) do if it._file == path then n = n + 1 end end
               if n > 0 then
-                vim.cmd("copen")
-                if vim.api.nvim_win_is_valid(st.diff_win) then vim.api.nvim_set_current_win(st.diff_win) end
+                -- show results at the bottom without yanking focus from wherever you are
+                ensure_qf_open()
                 vim.notify(("review_view: %s — %d issue(s)"):format(scope, n), vim.log.levels.WARN)
               else
                 vim.notify("review_view: " .. scope .. " — no issues", vim.log.levels.INFO)
@@ -444,6 +634,35 @@ function M.close()
   end
   S = nil
   return true
+end
+
+-- Recompute the file list + diffs against the CURRENT working tree (e.g. after a
+-- git checkout / new commit), wiping cached buffers and findings. Keeps the view.
+function M.refresh()
+  local st = S
+  if not st then return end
+  -- refresh refs in case HEAD moved
+  local okm, mb = git(st.root, { "merge-base", st.base, "HEAD" })
+  if okm and mb[1] and mb[1] ~= "" then st.merge_base = mb[1] end
+  local okb, br = git(st.root, { "symbolic-ref", "--short", "HEAD" })
+  if okb and br[1] and br[1] ~= "" then st.head_ref = br[1] end
+
+  -- detach the diff pane before wiping its buffers
+  if vim.api.nvim_win_is_valid(st.diff_win) and st.placeholder_buf then
+    vim.api.nvim_win_set_buf(st.diff_win, st.placeholder_buf)
+  end
+  for _, b in pairs(st.file_bufs) do
+    if vim.api.nvim_buf_is_valid(b) then pcall(vim.api.nvim_buf_delete, b, { force = true }) end
+  end
+  st.file_bufs, st.diffs, st.linemaps = {}, {}, {}
+  st.items, st.done, st.inflight = {}, {}, {}
+  st.current_file = nil
+  vim.diagnostic.reset(NS)
+  vim.fn.setqflist({}, "r", { title = "Review checkers", items = {} })
+
+  st.files = collect_files(st.root, st.base, st.merge_base, st.head_ref)
+  render_sidebar(st.sidebar_buf, st)
+  vim.notify(("review_view: refreshed (%d files)"):format(#st.files), vim.log.levels.INFO)
 end
 
 local function entry_under_cursor()
@@ -515,9 +734,11 @@ local function build_ui(st)
   vim.keymap.set("n", "za", function() toggle_fold(st) end, o)
   vim.keymap.set("n", "zM", function() fold_all(st, true) end, o)
   vim.keymap.set("n", "zR", function() fold_all(st, false) end, o)
+  vim.keymap.set("n", "R", function() M.refresh() end, o)
+  vim.keymap.set("n", "C", function() M.codecompanion({ entry = entry_under_cursor() }) end, o)
   vim.keymap.set("n", "q", M.close, o)
-  vim.keymap.set("n", "]q", "<cmd>cnext<cr>", o)
-  vim.keymap.set("n", "[q", "<cmd>cprev<cr>", o)
+  vim.keymap.set("n", "]q", function() M.qf_next() end, o)
+  vim.keymap.set("n", "[q", function() M.qf_prev() end, o)
 end
 
 -- Open the review view for the repo containing `path` (file or directory).
@@ -545,7 +766,7 @@ function M.open(path)
   local okm, mb = git(root, { "merge-base", base, "HEAD" })
   local merge_base = (okm and mb[1] and mb[1] ~= "") and mb[1] or base
 
-  local files = collect_files(root, base, head_ref)
+  local files = collect_files(root, base, merge_base, head_ref)
   if #files == 0 then
     vim.notify(("review_view: no changes in %s...%s"):format(base, head_ref), vim.log.levels.INFO)
     return
@@ -567,7 +788,7 @@ function M.open(path)
   -- No file is shown on open (empty placeholder) so nothing runs until selection.
   if vim.api.nvim_win_is_valid(S.sidebar_win) then
     vim.api.nvim_set_current_win(S.sidebar_win)
-    pcall(vim.api.nvim_win_set_cursor, S.sidebar_win, { 4, 0 })
+    pcall(vim.api.nvim_win_set_cursor, S.sidebar_win, { 5, 0 })
   end
 end
 
@@ -597,7 +818,77 @@ function M.context_for(bufnr, r1, r2)
     end
   end
   local lines = vim.api.nvim_buf_get_lines(bufnr, r1 - 1, r2, false)
-  return { file = path, l1 = lo, l2 = hi, lines = lines }
+  return { file = path, l1 = lo, l2 = hi, lines = lines, ft = vim.bo[bufnr].filetype }
+end
+
+-- Open a CodeCompanion chat seeded with the current review context: the file
+-- under review, its diff, the checker findings, and commit subjects. opts.entry
+-- overrides the file (e.g. the sidebar row under the cursor); opts.visual adds the
+-- current visual selection as a focus block.
+function M.codecompanion(opts)
+  opts = opts or {}
+  local st = S
+  if not st then return end
+  local cc_ok, cc = pcall(require, "codecompanion")
+  if not cc_ok then
+    vim.notify("review_view: CodeCompanion not available", vim.log.levels.WARN); return
+  end
+  local entry = opts.entry or st.current_file
+  if not entry then
+    vim.notify("review_view: select a file first (⏎)", vim.log.levels.WARN); return
+  end
+  local path = entry.path
+  local rc = require("config.review_context")
+
+  -- make sure the file's diff is computed/cached
+  if not st.diffs[path] then ensure_file_buf(st, entry) end
+
+  local parts = {}
+  table.insert(parts, ("Reviewing `%s` (`%s` → working tree) in repo `%s`."):format(
+    path, st.base, rc.repo_name(st.root)))
+
+  local subjects = rc.format_subjects(rc.commit_subjects(st.root, st.merge_base, "HEAD", 30))
+  if subjects then
+    table.insert(parts, ""); table.insert(parts, "Commits in this range:"); table.insert(parts, subjects)
+  end
+
+  local findings = {}
+  for _, it in ipairs(st.items) do
+    if it._file == path then findings[#findings + 1] = ("- line %d: %s"):format(it.lnum, it.text) end
+  end
+  if #findings > 0 then
+    table.insert(parts, ""); table.insert(parts, "Checker findings for this file:")
+    vim.list_extend(parts, findings)
+  end
+
+  local diff = st.diffs[path]
+  if diff and vim.trim(diff) ~= "" then
+    table.insert(parts, ""); table.insert(parts, "Diff:")
+    table.insert(parts, "```diff"); table.insert(parts, diff); table.insert(parts, "```")
+  end
+
+  if opts.visual then
+    local buf = vim.api.nvim_get_current_buf()
+    local l1, l2 = vim.fn.getpos("'<")[2], vim.fn.getpos("'>")[2]
+    if l1 > 0 and l2 > 0 then
+      if l1 > l2 then l1, l2 = l2, l1 end
+      local ctx = M.context_for(buf, l1, l2)
+      local lines = (ctx and ctx.lines) or vim.api.nvim_buf_get_lines(buf, l1 - 1, l2, false)
+      local ft = (ctx and ctx.ft) or vim.bo[buf].filetype or ""
+      table.insert(parts, "")
+      table.insert(parts, ("Focus on lines %d-%d:"):format((ctx and ctx.l1) or l1, (ctx and ctx.l2) or l2))
+      table.insert(parts, "```" .. ft); table.insert(parts, table.concat(lines, "\n")); table.insert(parts, "```")
+    end
+  end
+
+  table.insert(parts, "")
+  local chat = cc.chat({ messages = { { role = "user", content = table.concat(parts, "\n") } }, auto_submit = false })
+  vim.schedule(function()
+    if chat and chat.ui and chat.ui.win and vim.api.nvim_win_is_valid(chat.ui.win) then
+      vim.api.nvim_set_current_win(chat.ui.win)
+    end
+    vim.cmd("startinsert")
+  end)
 end
 
 -- nvim-tree entry point: open for the node under the cursor.
