@@ -51,15 +51,12 @@ M.codecompanion = {
   },
 }
 
--- DiffReview (<leader>cr): AI background review of the current diff → quickfix.
--- Files are reviewed automatically when opened in diffview and cached for the
--- session. U in the diffview panel clears the cache so files get re-reviewed.
--- Set auto_review = false to disable the automatic trigger.
+-- AI checker backend for the gR review view's default "ai" checker (see the
+-- "If omitted..." note below). Selects which command runs the diff review.
 -- M.diff_review = {
 --   claude_command = "/usr/local/bin/claude",   -- defaults to `claude` on PATH
 --   model          = "claude-haiku-4-5-20251001",
---   auto_review    = true,                       -- auto-review on WinEnter in diffview
---   debug          = false,                      -- opens a raw-stdout split
+--   env            = { ... },                    -- extra env for the command
 --
 --   -- Switch to local Ollama:
 --   -- claude_command = vim.fn.expand("~/.config/nvim/scripts/ollama-agent"),
@@ -68,7 +65,7 @@ M.codecompanion = {
 -- Any backend: write a script that reads stdin and streams to stdout;
 -- point claude_command at it. The -p flag is passed and can be ignored.
 
--- Base branch used by nvim-tree `gd` (diff vs base). Defaults to "main".
+-- Base branch used by nvim-tree `gR` (review vs base). Defaults to "main".
 -- M.git_base_branch = "develop"
 
 -- Review view (nvim-tree `gR`): red/green patch view of <base>...HEAD with a

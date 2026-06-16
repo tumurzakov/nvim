@@ -1,4 +1,4 @@
--- review_view: a small standalone patch-review screen (separate from diffview).
+-- review_view: a small standalone red/green patch-review screen (gR).
 --
 -- Two panes in their own tabpage:
 --   left  = grouped/indented list of files changed in <base>...HEAD (feature vs default)

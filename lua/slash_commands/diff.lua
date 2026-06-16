@@ -6,7 +6,7 @@ local rc = require("config.review_context")
 local fmt = string.format
 
 local function build_message()
-  local ctx = rc.diffview() or rc.fallback()
+  local ctx = rc.fallback()
   if not ctx then return nil, "Not inside a git repo" end
 
   local diff, err = rc.diff(ctx.root, ctx.left_sha, ctx.right_sha, ctx.file, { right_is_local = ctx.right_is_local })

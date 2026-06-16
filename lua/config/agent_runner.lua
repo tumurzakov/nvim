@@ -1,7 +1,7 @@
 -- agent_runner: spawn an external process and stream its stdout line-by-line.
 -- Used by config/review_view.lua to run review "checkers" (AI agents or linters)
--- that print `LOC: <file>:<line> <msg>` lines. Mirrors the CLAUDECODE="" fix and
--- partial-line buffering from config/diff_review.lua.
+-- that print `LOC: <file>:<line> <msg>` lines. Applies the CLAUDECODE="" fix and
+-- partial-line buffering for streamed stdout.
 local M = {}
 
 -- M.run_cmd(cmd, opts)

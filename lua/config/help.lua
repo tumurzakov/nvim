@@ -11,7 +11,7 @@ local help_text = [[
  \fg  Live grep   \rn Rename           \cc  Chat
  \fb  Buffers     \ca Code action      \cm  Commit message
  \fh  Help tags   \f  Format           \ca  Actions (visual)
- F9   Aerial                           \cq  Review Q (visual, Diffview-aware)
+ F9   Aerial                           \cq  Review Q (visual)
                                        /diff in chat: insert git diff
 
  TERMINAL (C-b prefix)                 PYTHON & TESTING
@@ -26,15 +26,10 @@ local help_text = [[
  F3   Zoom split  \ss  Speak sel       \ws  Summarize web page
                   \sq  Stop speaking
 
- GIT (Diffview)
- \gd  All changes (diffview)           \gc  Close review view / diffview
- \gh  File history                     \gH  Branch history
- gd   File diff (in tree)              gB   Diff vs base branch (in tree)
+ GIT & REVIEW
  gR   Patch review (red/green; r=review ]q/[q=nav Tab=fold zM/zR=all)
+ \gc  Close review view
  \kd  Drop sel/file:line → Claude kitty tab   \kf  Drop file path
-
- \cr  DiffReview (AI review → inline + quickfix; auto on file open)
- \cR  DiffReview: clear all     \xQ  Browse issues (quickfix)
 
  DIAGNOSTICS (Trouble)
  \xx  Workspace diagnostics            \xs  Symbols

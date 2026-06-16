@@ -24,5 +24,3 @@ require("config.agenda").setup()
 
 -- Voice dictation (Vosk)
 require("config.dictation")
-
-require("config.diff_review")

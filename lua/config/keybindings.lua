@@ -67,7 +67,7 @@ end
 local function open_codecompanion_chat_with_review_context()
   local mode = vim.fn.mode()
   if not mode:match("[vV\22]") then
-    vim.notify("Use \\cq in visual mode (e.g. in a Diffview pane)", vim.log.levels.WARN)
+    vim.notify("Use \\cq in visual mode (e.g. in a gR review pane)", vim.log.levels.WARN)
     return
   end
   leave_visual_mode()
@@ -78,7 +78,7 @@ local function open_codecompanion_chat_with_review_context()
   local selection = get_visual_selection_from_marks() or ""
 
   local rc = require("config.review_context")
-  local ctx = rc.diffview() or rc.fallback()
+  local ctx = rc.fallback()
   local path = (ctx and ctx.file) or vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ":.")
 
   local parts = {}
@@ -839,14 +839,15 @@ map("n", "<leader>fh", telescope_call("help_tags"), { desc = "Help tags (Telesco
 map({ "n", "v" }, "<C-l>", open_codecompanion_chat_with_selection, { desc = "CodeCompanion chat with selection" })
 map({ "n", "v" }, "<C-k>", cc_k.short_explain, { desc = "CodeCompanion short explain (K window)" })
 map("v", "<leader>ci", rewrite_visual_selection_with_codecompanion, { desc = "Rewrite selected text (CodeCompanion)" })
-map("v", "<leader>cq", open_codecompanion_chat_with_review_context, { desc = "CodeCompanion review question (Diffview-aware)" })
+map("v", "<leader>cq", open_codecompanion_chat_with_review_context, { desc = "CodeCompanion review question (base..HEAD)" })
 map("n", "<leader>cc", "<cmd>CodeCompanionChat<CR>", { desc = "CodeCompanion chat" })
 map("n", "<A-l>", "<cmd>CodeCompanionChat Toggle<CR>", { desc = "Toggle CodeCompanion chat" })
 map("n", "¬", "<cmd>CodeCompanionChat Toggle<CR>", { desc = "Toggle CodeCompanion chat" })
 map("n", "<leader>cm", "<cmd>CodeCompanion /commit<CR>", { desc = "CodeCompanion commit message" })
 map("v", "<leader>ca", "<cmd>CodeCompanionActions<CR>", { desc = "CodeCompanion actions" })
-map("n", "<leader>cr", function() require("config.diff_review").review() end, { desc = "DiffReview: AI review of diff (background)" })
-map("n", "<leader>cR", function() require("config.diff_review").clear() end,  { desc = "DiffReview: clear results" })
+
+-- Close the red/green (gR) review view if it's open
+map("n", "<leader>gc", function() require("config.review_view").close() end, { desc = "Close review view" })
 
 -- Kitty drop: send text into the tagged Claude Code kitty window
 map("v", "<leader>kd", function()

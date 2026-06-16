@@ -4,7 +4,6 @@ return {
   config = function()
     local ok, settings_local = pcall(require, "config.settings_local")
     local nerd_icons = not (ok and type(settings_local) == "table" and settings_local.nerd_font_icons == false)
-    local git_base = (ok and type(settings_local) == "table" and settings_local.git_base_branch) or "main"
 
     require("nvim-tree").setup({
       filters = {
@@ -39,56 +38,6 @@ return {
         vim.keymap.set("n", "P", api.node.open.preview_no_picker, opts("Preview (keep focus)"))
         -- жмём "t" => открыть в новом табе
         vim.keymap.set("n", "t", api.node.open.tab, opts("Open in new tab"))
-        -- жмём "gd" => открыть diffview для файла (рабочие изменения)
-        vim.keymap.set("n", "gd", function()
-          local node = api.tree.get_node_under_cursor()
-          if node and node.absolute_path then
-            vim.cmd("DiffviewOpen -- " .. vim.fn.fnameescape(node.absolute_path))
-          end
-        end, opts("Diffview: file diff"))
-        -- жмём "gB" => diffview против базовой ветки для репо под курсором
-        local function resolve_base(toplevel)
-          local function verify(ref)
-            vim.fn.systemlist({ "git", "-C", toplevel, "rev-parse", "--verify", "--quiet", ref })
-            return vim.v.shell_error == 0
-          end
-          local candidates = { git_base, "origin/" .. git_base }
-          for _, b in ipairs({ "main", "master", "develop" }) do
-            if b ~= git_base then
-              table.insert(candidates, b)
-              table.insert(candidates, "origin/" .. b)
-            end
-          end
-          for _, c in ipairs(candidates) do
-            if verify(c) then return c end
-          end
-          local out = vim.fn.systemlist({ "git", "-C", toplevel, "symbolic-ref", "--short", "refs/remotes/origin/HEAD" })
-          if vim.v.shell_error == 0 and out[1] and out[1] ~= "" then
-            return out[1]
-          end
-          return nil
-        end
-
-        vim.keymap.set("n", "gB", function()
-          local node = api.tree.get_node_under_cursor()
-          if not (node and node.absolute_path) then return end
-          local path = node.absolute_path
-          local dir = vim.fn.isdirectory(path) == 1 and path or vim.fn.fnamemodify(path, ":h")
-          local out = vim.fn.systemlist({ "git", "-C", dir, "rev-parse", "--show-toplevel" })
-          if vim.v.shell_error ~= 0 or not out[1] or out[1] == "" then
-            vim.notify("Not a git repo: " .. dir, vim.log.levels.WARN)
-            return
-          end
-          local toplevel = out[1]
-          local base = resolve_base(toplevel)
-          if not base then
-            vim.notify("No base branch found (tried " .. git_base .. ", main, master, develop, origin/HEAD)", vim.log.levels.WARN)
-            return
-          end
-          local branch_out = vim.fn.systemlist({ "git", "-C", toplevel, "symbolic-ref", "--short", "HEAD" })
-          local head_ref = (vim.v.shell_error == 0 and branch_out[1] and branch_out[1] ~= "") and branch_out[1] or "HEAD"
-          vim.cmd("DiffviewOpen -C" .. vim.fn.fnameescape(toplevel) .. " " .. base .. "..." .. head_ref)
-        end, opts("Diffview: vs base branch"))
         -- жмём "gR" => red/green patch-review view (feature vs base) с in-buffer quickfix
         vim.keymap.set("n", "gR", function()
           local node = api.tree.get_node_under_cursor()
