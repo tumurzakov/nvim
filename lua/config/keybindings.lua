@@ -835,6 +835,26 @@ map("n", "<leader>fg", telescope_call("live_grep"), { desc = "Live grep (Telesco
 map("n", "<leader>fb", telescope_call("buffers"), { desc = "Buffers (Telescope)" })
 map("n", "<leader>fh", telescope_call("help_tags"), { desc = "Help tags (Telescope)" })
 
+-- Repo terminal: \T from a normal file opens/focuses the shared terminal for
+-- the current file's git repo; pressing it again from that terminal jumps back
+-- to the file. (In nvim-tree, \T is buffer-local and acts on the node instead.)
+map("n", "<leader>T", function()
+  local st = require("config.shared_term")
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.bo.buftype == "terminal" and st.is_shared(buf) then
+    if not st.toggle_back() then vim.cmd("wincmd p") end   -- back to the file
+    return
+  end
+  local file = vim.api.nvim_buf_get_name(buf)
+  local dir = (file ~= "" and vim.fn.filereadable(file) == 1)
+    and vim.fn.fnamemodify(file, ":h") or vim.fn.getcwd()
+  local root = vim.fn.systemlist({ "git", "-C", dir, "rev-parse", "--show-toplevel" })[1]
+  if type(root) == "string" and root ~= "" and not root:lower():find("fatal") then
+    dir = root
+  end
+  st.cd(dir, { focus = true })
+end, { desc = "Repo terminal: focus / back (\\T)" })
+
 -- Markdown
 map("n", "<leader>mm", function() require("config.md_server").open() end, { desc = "Markdown view (HTTP server, live)" })
 map("n", "<leader>ms", function() require("config.md_server").stop() end, { desc = "Markdown server stop" })

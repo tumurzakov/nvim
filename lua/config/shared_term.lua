@@ -105,6 +105,33 @@ local function move_to_mru(t)
   end
 end
 
+---window id -> the file buffer a terminal was swapped over (for toggle_back)
+M._prev_buf = {}
+
+---In the current window, restore the file buffer that a shared terminal was
+---swapped over (the inverse of cd swapping a terminal into the editor window).
+---@return boolean restored
+function M.toggle_back()
+  local win = vim.api.nvim_get_current_win()
+  local prev = M._prev_buf[win]
+  if prev and vim.api.nvim_buf_is_valid(prev) then
+    vim.api.nvim_win_set_buf(win, prev)
+    M._prev_buf[win] = nil
+    return true
+  end
+  return false
+end
+
+---Is `bufnr` one of our shared terminals?
+---@param bufnr integer
+---@return boolean
+function M.is_shared(bufnr)
+  for _, t in ipairs(terminals) do
+    if t.bufnr == bufnr then return true end
+  end
+  return false
+end
+
 ---Does a live terminal already exist for this folder? Accepts a file or dir
 ---path; files resolve to their parent directory (matching M.cd).
 ---@param path string
@@ -141,8 +168,18 @@ function M.cd(path, opts)
   local host_win = term_win or find_main_editor_win()
   local landed_win
 
+  -- Remember the file buffer we're about to cover, so toggle_back() can restore
+  -- it in the same window (we swap the buffer in place, not open a split).
+  local function remember(win)
+    if win and vim.api.nvim_win_is_valid(win) then
+      local ob = vim.api.nvim_win_get_buf(win)
+      if vim.bo[ob].buftype == "" then M._prev_buf[win] = ob end
+    end
+  end
+
   if target then
     if host_win then
+      remember(host_win)
       vim.api.nvim_win_set_buf(host_win, target.bufnr)
       landed_win = host_win
     else
@@ -150,6 +187,7 @@ function M.cd(path, opts)
     end
     move_to_mru(target)
   elseif host_win then
+    remember(host_win)
     vim.api.nvim_set_current_win(host_win)
     vim.cmd("lcd " .. vim.fn.fnameescape(path))
     vim.cmd("terminal")
