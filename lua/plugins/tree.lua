@@ -5,6 +5,10 @@ return {
     local ok, settings_local = pcall(require, "config.settings_local")
     local nerd_icons = not (ok and type(settings_local) == "table" and settings_local.nerd_font_icons == false)
 
+    -- Subtle highlight for the inline branch label next to repo folders.
+    vim.api.nvim_set_hl(0, "NvimTreeGitBranch", { link = "Comment", default = true })
+    local git_branch_decorator = require("config.tree_git_branch").decorator()
+
     require("nvim-tree").setup({
       filters = {
         dotfiles = false,            -- показывать файлы, начинающиеся с точки
@@ -19,6 +23,9 @@ return {
 
         -- сначала ставим дефолтные бинды, чтобы ничего не сломать
         api.config.mappings.default_on_attach(bufnr)
+
+        -- floating git info popup when the cursor is on a repo folder
+        require("config.tree_git_popup").attach(bufnr)
 
         -- удобная helper-функция для опций
         local function opts(desc)
@@ -36,6 +43,10 @@ return {
         -- оставляем "p" под дефолтный paste (нужно для c + p),
         -- а preview переносим на "P"
         vim.keymap.set("n", "P", api.node.open.preview_no_picker, opts("Preview (keep focus)"))
+        -- "gb" => add distance from origin's default branch to the git popup
+        vim.keymap.set("n", "gb", function()
+          require("config.tree_git_popup").show_distance()
+        end, opts("Git: distance from default branch"))
         -- жмём "t" => открыть в новом табе
         vim.keymap.set("n", "t", api.node.open.tab, opts("Open in new tab"))
         -- жмём "gR" => red/green patch-review view (feature vs base) с in-buffer quickfix
@@ -66,6 +77,11 @@ return {
         width = 35,
       },
       renderer = {
+        -- builtins (default order) + our branch label after repo folders
+        decorators = {
+          "Git", "Open", "Hidden", "Modified", "Bookmark", "Diagnostics", "Copied", "Cut",
+          git_branch_decorator,
+        },
         icons = {
           web_devicons = {
             file = { enable = nerd_icons, color = nerd_icons },

@@ -105,6 +105,18 @@ local function move_to_mru(t)
   end
 end
 
+---Does a live terminal already exist for this folder? Accepts a file or dir
+---path; files resolve to their parent directory (matching M.cd).
+---@param path string
+---@return boolean
+function M.has(path)
+  if not path or path == "" then return false end
+  if vim.fn.isdirectory(path) == 0 then path = vim.fs.dirname(path) end
+  path = normalize_path(path)
+  gc()
+  return find_terminal_for_path(path) ~= nil
+end
+
 ---Switch to (or create) a terminal at the given path.
 ---If `path` is a file, uses its parent directory.
 ---Prefers to reuse: (1) the visible terminal window, (2) the main editor
