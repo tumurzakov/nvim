@@ -23,7 +23,8 @@ local help_text = [[
  \T       Tree: term here (focus term)
 
  WINDOW           SPEECH               WEB
- F3   Zoom split  \ss  Speak sel       \ws  Summarize web page
+ F3   Zoom split  F8   Read/stop      \ws  Summarize web page
+                  \ss  Speak sel
                   \sq  Stop speaking
 
  GIT & REVIEW

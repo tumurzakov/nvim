@@ -124,6 +124,28 @@ Rules:
               .. "\n" .. global_rules
           end,
         },
+        roles = {
+          -- Default only prints the adapter name (e.g. "CodeCompanion
+          -- (Claude Code)"). Append the model so the dialog shows which
+          -- model is in use. ACP adapters keep the model in defaults.model;
+          -- HTTP adapters in schema.model.default.
+          llm = function(adapter)
+            local model
+            if adapter.type == "acp" then
+              model = adapter.defaults and adapter.defaults.model
+            else
+              model = adapter.schema and adapter.schema.model and adapter.schema.model.default
+            end
+            if type(model) == "function" then
+              local ok, resolved = pcall(model, adapter)
+              model = ok and resolved or nil
+            end
+            if model and model ~= "" then
+              return string.format("CodeCompanion (%s · %s)", adapter.formatted_name, model)
+            end
+            return "CodeCompanion (" .. adapter.formatted_name .. ")"
+          end,
+        },
         slash_commands = {
           ["chats"] = {
             callback = "slash_commands.chats",
@@ -135,7 +157,7 @@ Rules:
           },
           ["diff"] = {
             callback = "slash_commands.diff",
-            description = "Insert git diff (Diffview-aware, falls back to base..HEAD)",
+            description = "Insert git diff (base..HEAD for the current repo)",
             opts = {
               contains_code = true,
             },
@@ -309,6 +331,10 @@ Rules:
               yolo = { vim.fn.expand("~/.local/bin/claude-code-acp"), "--yolo" },
             },
             defaults = {
+              -- Selected over ACP at session start; supports partial match
+              -- (e.g. "sonnet" -> "claude-sonnet-4-..."). Drives the chat
+              -- header display and the in-chat model picker.
+              model = CLAUDE_MODEL,
               timeout = 120000, -- 2 minutes for slow responses
               mcpServers = {
                 {

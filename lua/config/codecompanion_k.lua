@@ -121,6 +121,7 @@ function M.short_explain()
 
   local symbol = current_symbol()
   local ctx = current_context()
+  local filetype = vim.bo.filetype
   local mode = vim.fn.mode()
   local has_selection = mode:match("[vV\22]") ~= nil
 
@@ -158,14 +159,26 @@ function M.short_explain()
   end
 
   if selection and selection ~= "" then
-    table.insert(prompt_lines, "Selected text:\n```text\n" .. selection .. "\n```")
+    -- Fence the selection with the buffer's real filetype (e.g. ```terraform)
+    -- so it is the single, language-tagged block in the prompt.
+    local fence = (filetype ~= "" and filetype) or "text"
+    table.insert(prompt_lines, "Selected text:\n```" .. fence .. "\n" .. selection .. "\n```")
   end
 
   local prompt = table.concat(prompt_lines, "\n")
 
+  -- We insert the selection ourselves (above). Force is_visual=false on the
+  -- context handed to CodeCompanion so it does NOT auto-insert the selection a
+  -- second time as its own ```<filetype>``` block. The public chat() API drops
+  -- `stop_context_insertion`, so that flag has no effect — overriding the
+  -- context's is_visual is the only reliable lever (see ui/init.lua render()).
+  local buffer_context = require("codecompanion.utils.context").get(0)
+  buffer_context.is_visual = false
+  buffer_context.is_normal = true
+
   local chat = codecompanion.chat({
     auto_submit = true,
-    stop_context_insertion = true,
+    context = buffer_context,
     messages = {
       { role = "user", content = prompt },
     },

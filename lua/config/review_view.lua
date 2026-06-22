@@ -702,8 +702,8 @@ local function build_ui(st)
   st.diff_win = vim.api.nvim_get_current_win()
   st.placeholder_buf = new_scratch(nil)
   vim.api.nvim_buf_set_lines(st.placeholder_buf, 0, -1, false, {
-    "", "  Select a file (⏎) to view its diff and run the checkers.", "",
-    "  r = re-run checkers   ]q/[q = navigate findings",
+    "", "  Select a file (⏎) to view its diff.", "",
+    "  r = run checkers   ]q/[q = navigate findings",
   })
   vim.bo[st.placeholder_buf].modifiable = false
   vim.api.nvim_win_set_buf(st.diff_win, st.placeholder_buf)
@@ -721,10 +721,11 @@ local function build_ui(st)
 
   local o = { buffer = st.sidebar_buf, nowait = true, silent = true }
   vim.keymap.set("n", "<CR>", function()
-    -- On a folder header: fold/unfold. On a file: show diff + run all checkers.
+    -- On a folder header: fold/unfold. On a file: just show its diff (no checkers;
+    -- press `r` to run the checkers on the current file).
     if toggle_fold(st) then return end
     local e = entry_under_cursor()
-    if e then run_checkers(st, e) end
+    if e then show_file(st, e) end
   end, o)
   vim.keymap.set("n", "r", function()
     local e = entry_under_cursor()

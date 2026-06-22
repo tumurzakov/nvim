@@ -835,6 +835,10 @@ map("n", "<leader>fg", telescope_call("live_grep"), { desc = "Live grep (Telesco
 map("n", "<leader>fb", telescope_call("buffers"), { desc = "Buffers (Telescope)" })
 map("n", "<leader>fh", telescope_call("help_tags"), { desc = "Help tags (Telescope)" })
 
+-- Markdown
+map("n", "<leader>mm", function() require("config.md_server").open() end, { desc = "Markdown view (HTTP server, live)" })
+map("n", "<leader>ms", function() require("config.md_server").stop() end, { desc = "Markdown server stop" })
+
 -- CodeCompanion
 map({ "n", "v" }, "<C-l>", open_codecompanion_chat_with_selection, { desc = "CodeCompanion chat with selection" })
 map({ "n", "v" }, "<C-k>", cc_k.short_explain, { desc = "CodeCompanion short explain (K window)" })
@@ -891,43 +895,6 @@ map("n", "<leader>rl", function()
   end
   send_to_terminal(line)
 end, { desc = "Run current line in terminal" })
-
--- Text-to-speech (macOS `say` / Linux `espeak`)
-local tts_job_id = nil
-
-local function tts_stop()
-  if tts_job_id then
-    vim.fn.jobstop(tts_job_id)
-    tts_job_id = nil
-  end
-end
-
-local function tts_speak()
-  tts_stop()
-  local save = vim.fn.getreg("s")
-  vim.cmd('noautocmd normal! "sy')
-  local text = vim.fn.getreg("s")
-  vim.fn.setreg("s", save)
-  if not text or text == "" then
-    vim.notify("TTS: no text selected", vim.log.levels.WARN)
-    return
-  end
-  local cmd
-  if vim.fn.executable("say") == 1 then
-    cmd = { "say", text }
-  elseif vim.fn.executable("espeak") == 1 then
-    cmd = { "espeak", text }
-  else
-    vim.notify("TTS: no speech command found (need `say` or `espeak`)", vim.log.levels.ERROR)
-    return
-  end
-  tts_job_id = vim.fn.jobstart(cmd, {
-    on_exit = function() tts_job_id = nil end,
-  })
-end
-
-map("v", "<leader>ss", tts_speak, { desc = "TTS: speak selection" })
-map({ "n", "v" }, "<leader>sq", tts_stop, { desc = "TTS: stop speaking" })
 
 -- Web page summarizer
 local function web_summarize(url, guidance, insert_after, indent)
@@ -1046,7 +1013,11 @@ map({ "n", "v" }, "<leader>tn", run_pytest_nearest, { desc = "Pytest nearest" })
 map("n", "<leader>rx", run_ruff_fix_current_file, { desc = "Ruff check --fix" })
 map("n", "<leader>x", run_current_python_script, { desc = "Run current Python file" })
 
--- TTS: F8 reads paragraph-by-paragraph with real-time word highlighting
+-- Text-to-speech (single engine via tts.py: Piper → macOS system voice).
+--   F8 (normal): read from cursor paragraph-by-paragraph (auto-advance) with
+--                real-time word highlighting; press again to stop.
+--   F8 / \ss (visual): speak the selection.
+--   \sq: stop. One job + one stop function shared by all of the above.
 local tts_ns = vim.api.nvim_create_namespace("tts_highlight")
 local tts_job = nil
 local tts_buf = nil
@@ -1194,6 +1165,18 @@ local function tts_speak_paragraph(buf, start_line, end_line)
   vim.fn.chanclose(tts_job, "stdin")
 end
 
+-- Speak the visual selection as a single chunk (no auto-advance).
+local function tts_speak_selection()
+  tts_stop()
+  local buf = vim.api.nvim_get_current_buf()
+  local start_pos = vim.api.nvim_buf_get_mark(buf, "<")
+  local end_pos = vim.api.nvim_buf_get_mark(buf, ">")
+  if start_pos[1] == 0 then return end
+  tts_continuing = false
+  tts_speak_paragraph(buf, start_pos[1] - 1, end_pos[1])
+end
+
+-- F8 (normal): toggle — read from cursor paragraph-by-paragraph, or stop.
 map("n", "<F8>", function()
   if tts_stop() then return end
   local buf = vim.api.nvim_get_current_buf()
@@ -1202,22 +1185,18 @@ map("n", "<F8>", function()
   if not start then return end
   tts_continuing = true
   tts_speak_paragraph(buf, start, finish)
-end, { desc = "TTS from cursor paragraph-by-paragraph / stop" })
+end, { desc = "TTS: read from cursor / stop" })
 
-map("v", "<F8>", function()
+-- Visual selection → speak (F8 or \ss share the same engine + highlighting).
+local function tts_selection_mapping()
   leave_visual_mode()
-  vim.schedule(function()
-    local buf = vim.api.nvim_get_current_buf()
-    local start_pos = vim.api.nvim_buf_get_mark(buf, "<")
-    local end_pos = vim.api.nvim_buf_get_mark(buf, ">")
-    if start_pos[1] == 0 then return end
-    local start_line = start_pos[1] - 1
-    local lines = vim.api.nvim_buf_get_lines(buf, start_line, end_pos[1], false)
-    if #lines > 0 then
-      tts_speak(buf, start_line, lines)
-    end
-  end)
-end, { desc = "TTS selection" })
+  vim.schedule(tts_speak_selection)
+end
+map("v", "<F8>", tts_selection_mapping, { desc = "TTS: speak selection" })
+map("v", "<leader>ss", tts_selection_mapping, { desc = "TTS: speak selection" })
+
+-- Stop from anywhere (also stops an in-progress F8 read).
+map({ "n", "v" }, "<leader>sq", function() tts_stop() end, { desc = "TTS: stop speaking" })
 
 pcall(vim.api.nvim_del_user_command, "ReloadConfig")
 vim.api.nvim_create_user_command("ReloadConfig", reload_nvim_config, {

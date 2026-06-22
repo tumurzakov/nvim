@@ -24,3 +24,6 @@ require("config.agenda").setup()
 
 -- Voice dictation (Vosk)
 require("config.dictation")
+
+-- Local HTTP file/markdown preview server (auto-starts, serves cwd on localhost)
+require("config.md_server").setup()
