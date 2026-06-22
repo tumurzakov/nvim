@@ -160,7 +160,7 @@ local function render_sidebar(buf, st)
 
   table.insert(lines, ("%s → working tree  (%d files)"):format(st.base, #st.files))
   table.insert(lines, "● uncommitted   + new   (blank = committed)")
-  table.insert(lines, "r=review R=reload C=chat ⏎=open Tab=fold q=close")
+  table.insert(lines, "? help   q quit   R reload   C chat")
   table.insert(lines, "")
 
   -- group by directory
@@ -248,7 +248,29 @@ local function setup_diff_keymaps(buf)
     vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
     M.codecompanion({ visual = true })
   end, o)
+  vim.keymap.set("n", "e", function() M.edit_under_cursor() end, o)
+  vim.keymap.set("n", "?", function() M.show_help() end, o)
   vim.keymap.set("n", "q", function() M.close() end, o)
+end
+
+-- Re-display the help/cheatsheet (the placeholder buffer) in the diff pane.
+function M.show_help()
+  if S and vim.api.nvim_win_is_valid(S.diff_win) and S.placeholder_buf then
+    vim.api.nvim_win_set_buf(S.diff_win, S.placeholder_buf)
+  end
+end
+
+-- Inverse of map_line: a diff-buffer row -> its source line (exact, else the
+-- nearest mapped row above it, else 1). For untracked full-content buffers the
+-- linemap is identity, so this returns the row unchanged.
+local function src_for_row(linemap, row)
+  if not linemap then return row end
+  local best_src, best_row
+  for src, r in pairs(linemap) do
+    if r == row then return src end
+    if r <= row and (not best_row or r > best_row) then best_row, best_src = r, src end
+  end
+  return best_src or 1
 end
 
 -- Map a reported new-file line to a diff-buffer row (exact, else nearest <=, else 1).
@@ -641,6 +663,16 @@ end
 function M.refresh()
   local st = S
   if not st then return end
+  -- remember what's open so we can restore it after the rebuild. Prefer the file
+  -- actually shown in the diff pane (in case current_file drifted, e.g. after a
+  -- ]q/[q jump), falling back to current_file.
+  local diff_buf = vim.api.nvim_win_is_valid(st.diff_win) and vim.api.nvim_win_get_buf(st.diff_win) or nil
+  local prev_path = (diff_buf and M.file_for(diff_buf)) or (st.current_file and st.current_file.path)
+  local prev_view
+  if prev_path and diff_buf == st.file_bufs[prev_path] then
+    prev_view = vim.api.nvim_win_call(st.diff_win, function() return vim.fn.winsaveview() end)
+  end
+
   -- refresh refs in case HEAD moved
   local okm, mb = git(st.root, { "merge-base", st.base, "HEAD" })
   if okm and mb[1] and mb[1] ~= "" then st.merge_base = mb[1] end
@@ -662,6 +694,21 @@ function M.refresh()
 
   st.files = collect_files(st.root, st.base, st.merge_base, st.head_ref)
   render_sidebar(st.sidebar_buf, st)
+
+  -- re-open the same file (if it still has changes) and restore the cursor/view
+  if prev_path then
+    for _, e in ipairs(st.files) do
+      if e.path == prev_path then
+        show_file(st, e)
+        if prev_view and vim.api.nvim_win_is_valid(st.diff_win) then
+          local lines = vim.api.nvim_buf_line_count(st.file_bufs[prev_path] or -1)
+          prev_view.lnum = math.min(prev_view.lnum, math.max(1, lines))
+          vim.api.nvim_win_call(st.diff_win, function() vim.fn.winrestview(prev_view) end)
+        end
+        break
+      end
+    end
+  end
   vim.notify(("review_view: refreshed (%d files)"):format(#st.files), vim.log.levels.INFO)
 end
 
@@ -702,8 +749,22 @@ local function build_ui(st)
   st.diff_win = vim.api.nvim_get_current_win()
   st.placeholder_buf = new_scratch(nil)
   vim.api.nvim_buf_set_lines(st.placeholder_buf, 0, -1, false, {
-    "", "  Select a file (⏎) to view its diff.", "",
-    "  r = run checkers   ]q/[q = navigate findings",
+    "",
+    "  REVIEW — red/green patch view      (press ? to show this help)",
+    "",
+    "  SIDEBAR (file list)",
+    "    ⏎      show diff / fold folder       r        run checkers",
+    "    Tab/za  fold folder                  zM/zR    fold / unfold all",
+    "    C       CodeCompanion chat           ]q/[q    prev / next finding",
+    "    R       refresh                      q        close review",
+    "",
+    "  DIFF PANE",
+    "    e       edit file in a tab           C        CodeCompanion (n/v)",
+    "    ]q/[q   prev / next finding          R        refresh",
+    "    q       close review",
+    "",
+    "  EDIT TAB (after pressing e)",
+    "    gR      save & back to review        gt/gT    switch tab",
   })
   vim.bo[st.placeholder_buf].modifiable = false
   vim.api.nvim_win_set_buf(st.diff_win, st.placeholder_buf)
@@ -737,6 +798,7 @@ local function build_ui(st)
   vim.keymap.set("n", "zR", function() fold_all(st, false) end, o)
   vim.keymap.set("n", "R", function() M.refresh() end, o)
   vim.keymap.set("n", "C", function() M.codecompanion({ entry = entry_under_cursor() }) end, o)
+  vim.keymap.set("n", "?", function() M.show_help() end, o)
   vim.keymap.set("n", "q", M.close, o)
   vim.keymap.set("n", "]q", function() M.qf_next() end, o)
   vim.keymap.set("n", "[q", function() M.qf_prev() end, o)
@@ -820,6 +882,65 @@ function M.context_for(bufnr, r1, r2)
   end
   local lines = vim.api.nvim_buf_get_lines(bufnr, r1 - 1, r2, false)
   return { file = path, l1 = lo, l2 = hi, lines = lines, ft = vim.bo[bufnr].filetype }
+end
+
+-- Open the real file shown in the current diff pane in a (reused) edit tab, at
+-- the source line under the cursor. `gR` in that buffer saves and returns to the
+-- review (refreshing the diff to reflect the edits).
+function M.edit_under_cursor()
+  if not S then return end
+  local bufnr = vim.api.nvim_get_current_buf()
+  local path = M.file_for(bufnr)
+  if not path then
+    vim.notify("review_view: cursor is not in a diff buffer", vim.log.levels.WARN)
+    return
+  end
+  local row = vim.api.nvim_win_get_cursor(0)[1]
+  local srcline = src_for_row((S.linemaps or {})[path], row)
+  local abspath = S.root .. "/" .. path
+
+  -- reuse one edit tab so repeated edits don't pile up tabs
+  if S.edit_tab and vim.api.nvim_tabpage_is_valid(S.edit_tab) then
+    vim.api.nvim_set_current_tabpage(S.edit_tab)
+    vim.cmd("edit " .. vim.fn.fnameescape(abspath))
+  else
+    vim.cmd("tabedit " .. vim.fn.fnameescape(abspath))
+    S.edit_tab = vim.api.nvim_get_current_tabpage()
+  end
+  pcall(vim.api.nvim_win_set_cursor, 0, { srcline, 0 })
+  pcall(vim.cmd, "normal! zz")
+
+  vim.keymap.set("n", "gR", function() M.edit_return(path) end, {
+    buffer = vim.api.nvim_get_current_buf(), nowait = true, silent = true,
+    desc = "Review: save & back to review",
+  })
+  vim.notify("review_view: editing " .. path .. "   (gR = save & back, gt = review tab)",
+    vim.log.levels.INFO)
+end
+
+-- Save the edit buffer (if a real, modified file), close the edit tab, return to
+-- the review tab, refresh the diffs and re-show the edited file's diff.
+function M.edit_return(path)
+  if vim.bo.buftype == "" and vim.bo.modifiable and not vim.bo.readonly and vim.bo.modified then
+    pcall(vim.cmd, "write")
+  end
+  local review_tab = S and S.tabpage
+  if S and S.edit_tab and vim.api.nvim_tabpage_is_valid(S.edit_tab)
+      and #vim.api.nvim_list_tabpages() > 1 then
+    pcall(vim.cmd, "tabclose")
+    S.edit_tab = nil
+  end
+  if not S then return end
+  if review_tab and vim.api.nvim_tabpage_is_valid(review_tab) then
+    pcall(vim.api.nvim_set_current_tabpage, review_tab)
+  end
+  M.refresh()
+  -- re-display the file we just edited, if it still has changes
+  if path then
+    for _, e in ipairs(S.files or {}) do
+      if e.path == path then show_file(S, e); break end
+    end
+  end
 end
 
 -- Open a CodeCompanion chat seeded with the current review context: the file

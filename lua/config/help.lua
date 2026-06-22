@@ -28,7 +28,7 @@ local help_text = [[
                   \sq  Stop speaking
 
  GIT & REVIEW
- gR   Patch review (red/green; r=review ]q/[q=nav Tab=fold zM/zR=all)
+ gR   Patch review (red/green; r=review e=edit ]q/[q=nav Tab=fold zM/zR=all)
  \gc  Close review view
  \kd  Drop sel/file:line → Claude kitty tab   \kf  Drop file path
 
