@@ -128,6 +128,36 @@ local code_text = [==[
  \rx  Ruff check --fix                 venv auto-detected (uv / poetry)
  \x   Run current file                 terraform-ls drives completion]==]
 
+local plugins_text = [==[
+ Plugin hotkeys
+
+ TELESCOPE (fuzzy find)                NVIM-TREE  (\tt toggle · ±/`/§ focus)
+ \ff  Find files                       P    Preview (keep focus in tree)
+ \fg  Live grep                        t    Open node in new tab
+ \fb  Buffers                          gb   Git branch popup
+ \fh  Help tags                        gR   Red / green patch review
+ :Telescope projects   switch project  T    Terminal in folder (keep tree)
+ picker: C-n/p move · C-x/C-v split    \T   Terminal in folder (focus it)
+         CR open · C-q → quickfix       a d r x c p  add/del/rename/cut/copy
+
+ TROUBLE (diagnostics)                 CODECOMPANION (AI)
+ \xx \xX  Workspace / buffer diag      C-l  Chat with selection
+ \xs      Symbols                      C-k  Short explain (hover window)
+ \xl      LSP refs / definitions       A-l / ¬   Toggle chat
+ \xQ \xL  Quickfix / location list     \cc Chat  ·  \ci Rewrite (visual)
+ [x  ]x   Prev / next item             \cm Commit  ·  \ca Actions (visual)
+                                       \cq  Review question (visual)
+ GIT                                   OUTLINE / HISTORY
+ :Git  :G   Fugitive status & cmds     F9   Aerial symbol outline
+ gR  patch review  ·  \gc  close       F5   Undotree
+ gitsigns: gutter signs (no maps)      :MCPHub   MCP server dashboard
+ :Gitsigns stage_hunk / blame_line     :Telescope projects   projects
+
+ MARKDOWN                              EDITING (see Code tab for detail)
+ \mm  Live HTML server (\ms stop)      ys ds cs   surround
+ :RenderMarkdown toggle                af if ac ic aa ia   text objects
+ (.md auto-renders in buffer)          auto-pairs close ( [ { " ' in insert]==]
+
 local console_text = [[
  Terminal navigation — bash / zsh (macOS & Linux)
 
@@ -241,6 +271,7 @@ local sheets = {
   { name = "Mine", text = vim_text },
   { name = "Vim", text = vim_general_text },
   { name = "Code", text = code_text },
+  { name = "Plugins", text = plugins_text },
   { name = "Console", text = console_text },
   { name = "Kitty", text = kitty_text },
   { name = "AWS", text = aws_text },
