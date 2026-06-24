@@ -89,7 +89,16 @@ local vim_general_text = [[
  :%!sort   filter buffer through a shell   ·   :r !date  read output
  :w ++p    write, creating missing parent dirs
  :verbose map \x   where is a key mapped   ·   ga  char codes here
- g- g+   :earlier 5m   walk undo history / undo branches]]
+ g- g+   :earlier 5m   walk undo history / undo branches
+
+ WINDOWS / FILES                       GREP → QUICKFIX
+ C-w s / C-w v   split horiz / vert    :grep -rn pat    grep → quickfix
+ C-w h j k l     focus split           :vimgrep /pat/ **/*   vim's regex
+ C-w w / C-w p   cycle / last split    :copen  :cclose  open / close qf
+ C-w o           only (close others)   :cn  :cp         next / prev match
+ C-w c / C-w q   close split           :cdo s/a/b/g | update  edit all
+ C-^   (= C-6)   edit alternate file   :set grepprg=rg\ --vimgrep
+ gf              open file under cursor]]
 
 local console_text = [[
  Terminal navigation — bash / zsh (macOS & Linux)
