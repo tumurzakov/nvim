@@ -84,6 +84,7 @@ local vim_general_text = [[
 
  COMMAND-LINE / EX
  q:    command-line window — edit & re-run past commands
+ C-r 0  paste yank reg   ·   C-r "  last delete   ·   C-r +  clipboard
  C-r C-w   pull word under cursor into  :  or  /
  :%!sort   filter buffer through a shell   ·   :r !date  read output
  :w ++p    write, creating missing parent dirs
