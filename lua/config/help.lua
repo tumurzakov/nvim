@@ -226,6 +226,12 @@ local claude_text = [[
  ! prefix   Run a bash command         /help    All commands
  # prefix   Add a memory               @path    Reference a file
 
+ PROMPT BAR (text input — same readline keys as the Console tab)
+ C-a / C-e   Line start / end          A-b / A-f   Word back / forward
+ C-b / C-f   Char back / forward       C-w  del word  ·  C-u  clear line
+ C-k         Delete to end of line     \ + Enter / Shift-Enter   newline
+ ↑ / ↓       Recall past prompts (or move between lines when multiline)
+
  TIPS
  Enter Plan mode (Shift-Tab) to design before editing.
  Pipe data in:   cat file | claude -p "explain this"
