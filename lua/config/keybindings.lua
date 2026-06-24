@@ -395,43 +395,86 @@ local function buf_terminal_channel(buf)
   return nil
 end
 
-local function find_terminal_channel()
+-- Dedicated "run" terminal for <leader>r / <leader>rl. It is tagged with a
+-- buffer-local flag so it is never confused with a \T repo terminal or a
+-- `C-b c` terminal tab — running a selection must NEVER silently hijack an
+-- unrelated shell.
+local RUN_TERM_VAR = "run_scratch_terminal"
+
+local function buf_is_run_terminal(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  if vim.bo[buf].buftype ~= "terminal" then
+    return false
+  end
+  local ok, v = pcall(vim.api.nvim_buf_get_var, buf, RUN_TERM_VAR)
+  return ok and v == true
+end
+
+-- Locate a live run-terminal. Returns chan, buf, win (win is nil if hidden).
+local function find_run_terminal()
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    local chan = buf_terminal_channel(vim.api.nvim_win_get_buf(win))
-    if chan then
-      return chan
+    local buf = vim.api.nvim_win_get_buf(win)
+    if buf_is_run_terminal(buf) then
+      local chan = buf_terminal_channel(buf)
+      if chan then
+        return chan, buf, win
+      end
     end
   end
 
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    local chan = buf_terminal_channel(buf)
-    if chan then
-      return chan
+    if vim.api.nvim_buf_is_loaded(buf) and buf_is_run_terminal(buf) then
+      local chan = buf_terminal_channel(buf)
+      if chan then
+        return chan, buf, nil
+      end
     end
   end
 
   return nil
 end
 
-local function ensure_terminal_channel()
-  local chan = find_terminal_channel()
+local function ensure_run_terminal_channel()
+  local origin = vim.api.nvim_get_current_win()
+  local chan, buf, win = find_run_terminal()
+
   if chan then
+    -- Reuse our own run-terminal. If it is hidden, surface it in a right split
+    -- so output is always visible (fixes the original silent-execution issue).
+    if not win then
+      vim.cmd("botright vsplit")
+      vim.api.nvim_win_set_buf(0, buf)
+      if vim.api.nvim_win_is_valid(origin) then
+        vim.api.nvim_set_current_win(origin)
+      end
+    end
     return chan
   end
 
-  vim.cmd("tabnew")
+  -- None yet: open a fresh, visible run-terminal in a right split and tag it.
+  vim.cmd("botright vsplit")
   vim.cmd("terminal")
 
   local bufnr = vim.api.nvim_get_current_buf()
+  pcall(vim.api.nvim_buf_set_var, bufnr, RUN_TERM_VAR, true)
+
+  local new_chan
   for _ = 1, 30 do
-    local ok, new_chan = pcall(vim.api.nvim_buf_get_var, bufnr, "terminal_job_id")
-    if ok and new_chan and job_running(new_chan) then
-      return new_chan
+    local ok, c = pcall(vim.api.nvim_buf_get_var, bufnr, "terminal_job_id")
+    if ok and c and job_running(c) then
+      new_chan = c
+      break
     end
     vim.wait(20)
   end
 
-  return nil
+  if vim.api.nvim_win_is_valid(origin) then
+    vim.api.nvim_set_current_win(origin)
+  end
+
+  return new_chan
 end
 
 local function get_visual_text()
@@ -457,7 +500,7 @@ local function scroll_terminal_to_bottom(chan)
 end
 
 local function send_to_terminal(send)
-  local chan = ensure_terminal_channel()
+  local chan = ensure_run_terminal_channel()
   if not chan then
     print("Could not open terminal")
     return false
