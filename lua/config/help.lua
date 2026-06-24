@@ -100,6 +100,34 @@ local vim_general_text = [[
  C-^   (= C-6)   edit alternate file   :set grepprg=rg\ --vimgrep
  gf              open file under cursor]]
 
+local code_text = [==[
+ Code — LSP · refactor · Python · Terraform
+
+ LSP / NAVIGATE                        DIAGNOSTICS
+ gd  Definition   gr  References       [d  ]d   Prev / next problem
+ gi  Implementation  K  Hover docs     gl       Show diagnostic float
+ \rn Rename       \ca Code action      \xx \xX  Trouble work / buffer
+ \f  Format buffer                     \xs      Symbols   ·   F9 Aerial
+ C-s Signature help (insert mode)
+
+ TREESITTER TEXT OBJECTS   (operator + object, e.g. daf  cif  vac)
+ af if   a / inner function            ]m [m   Next / prev function
+ ac ic   a / inner class               ]] [[   Next / prev class
+ aa ia   a / inner argument            \na \pa Swap argument next / prev
+ daf delete func · cif change body · vac select class · cia change arg
+
+ SURROUND (ys add · ds delete · cs change)    PAIRS
+ ysiw"   surround word with "          ds(    delete surrounding ( )
+ yss)    surround whole line           cs"'   change  "  to  '
+ S"      surround visual selection     ( [ { " '  auto-close in insert
+
+ PYTHON                                TERRAFORM
+ \ta  Pytest all in file               gd K \rn  go-to / hover / rename
+ \tf  Pytest current file              \ca   code action
+ \tn  Pytest nearest (cursor)          \f    fmt  (also runs on save)
+ \rx  Ruff check --fix                 venv auto-detected (uv / poetry)
+ \x   Run current file                 terraform-ls drives completion]==]
+
 local console_text = [[
  Terminal navigation — bash / zsh (macOS & Linux)
 
@@ -206,6 +234,7 @@ local claude_text = [[
 local sheets = {
   { name = "Mine", text = vim_text },
   { name = "Vim", text = vim_general_text },
+  { name = "Code", text = code_text },
   { name = "Console", text = console_text },
   { name = "Kitty", text = kitty_text },
   { name = "AWS", text = aws_text },

@@ -19,13 +19,13 @@ return {
 
     vim.filetype.add({
       filename = { ["go.work"] = "gowork" },
-      extension = { gotmpl = "gotmpl" },
+      extension = { gotmpl = "gotmpl", tf = "terraform", tfvars = "terraform-vars" },
     })
 
     -- Mason setup
     require("mason").setup()
     require("mason-lspconfig").setup({
-      ensure_installed = filter({ "pyright", "ruff", "gopls", "jsonls" }),
+      ensure_installed = filter({ "pyright", "ruff", "gopls", "jsonls", "terraformls" }),
       automatic_installation = true,
     })
 
@@ -48,6 +48,11 @@ return {
       vim.keymap.set("n", "<leader>f", function()
         vim.lsp.buf.format({ async = true })
       end, opts)
+      -- Diagnostics navigation + inline help
+      vim.keymap.set("n", "[d", function() vim.diagnostic.jump({ count = -1, float = true }) end, opts)
+      vim.keymap.set("n", "]d", function() vim.diagnostic.jump({ count = 1, float = true }) end, opts)
+      vim.keymap.set("n", "gl", vim.diagnostic.open_float, opts)
+      vim.keymap.set("i", "<C-s>", vim.lsp.buf.signature_help, opts)
     end
 
     vim.lsp.config("pyright", {
@@ -141,7 +146,22 @@ return {
       on_attach = on_attach,
     })
 
-    vim.lsp.enable(filter({ "pyright", "ruff", "gopls", "jsonls" }))
+    vim.lsp.config("terraformls", {
+      cmd = resolve_cmd("terraform-ls", { "serve" }),
+      filetypes = { "terraform", "terraform-vars" },
+      capabilities = capabilities,
+      on_attach = on_attach,
+      root_markers = { ".terraform", ".terraform.lock.hcl", ".git" },
+    })
+
+    -- Format Terraform files on save (terraform-ls provides the formatter).
+    vim.api.nvim_create_autocmd("BufWritePre", {
+      group = vim.api.nvim_create_augroup("user.terraform.fmt", { clear = true }),
+      pattern = { "*.tf", "*.tfvars" },
+      callback = function() vim.lsp.buf.format({ async = false }) end,
+    })
+
+    vim.lsp.enable(filter({ "pyright", "ruff", "gopls", "jsonls", "terraformls" }))
     vim.api.nvim_create_autocmd("VimEnter", {
       group = vim.api.nvim_create_augroup("user.lsp.bootstrap", { clear = true }),
       once = true,
