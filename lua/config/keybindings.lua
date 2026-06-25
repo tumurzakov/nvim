@@ -899,7 +899,7 @@ map("n", "<leader>T", function()
 end, { desc = "Repo terminal: focus / back (\\T)" })
 
 -- Terminal switcher: floating picker → show chosen terminal in the right window
-map("n", "<leader>tl", function() require("config.term_switcher").pick() end, { desc = "Switch terminal (floating picker)" })
+map("n", "<leader>ts", function() require("config.term_switcher").pick() end, { desc = "Switch terminal (floating picker)" })
 
 -- Markdown
 map("n", "<leader>mm", function() require("config.md_server").open() end, { desc = "Markdown view (HTTP server, live)" })

@@ -26,7 +26,7 @@ local vim_text = [[
  \r       Run selection (visual)       \rx  Ruff fix
  T        Tree: term here (keep tree)  \x   Run file
  \T       Tree: term here (focus term)
- \tl      Switch terminal (float picker → right window)
+ \ts      Switch terminal (float picker → right window)
 
  WINDOW           SPEECH               WEB
  F3   Zoom split  F8   Read/stop      \ws  Summarize web page
