@@ -901,6 +901,15 @@ end, { desc = "Repo terminal: focus / back (\\T)" })
 -- Terminal switcher: floating picker → show chosen terminal in the right window
 map("n", "<F4>", function() require("config.term_switcher").pick() end, { desc = "Switch terminal (floating picker)" })
 
+-- ...also reachable from INSIDE a terminal: leave terminal mode, then pick.
+-- F4 (same key everywhere) and the <C-\>m chord (next to the <C-\><C-n> exit).
+local function switch_terminal_from_term()
+  leave_terminal_mode()
+  vim.schedule(function() require("config.term_switcher").pick() end)
+end
+map("t", "<F4>", switch_terminal_from_term, { desc = "Switch terminal (from terminal mode)" })
+map("t", "<C-\\>m", switch_terminal_from_term, { desc = "Switch terminal (from terminal mode)" })
+
 -- Markdown
 map("n", "<leader>mm", function() require("config.md_server").open() end, { desc = "Markdown view (HTTP server, live)" })
 map("n", "<leader>ms", function() require("config.md_server").stop() end, { desc = "Markdown server stop" })
