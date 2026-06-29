@@ -46,7 +46,7 @@ local vim_text = [[
 
  EDITING          COMPLETION (insert)  COMMANDS
  jk  Leave insert C-Space Trigger      :ReloadConfig
-                  Enter   Confirm      :CC  CodeCompanion
+ y  →clip (v)     Enter   Confirm      :CC  CodeCompanion
                   C-e     Abort        :Agenda [date]
                                        :Cheatsheet]]
 

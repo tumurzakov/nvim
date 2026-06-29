@@ -869,6 +869,9 @@ end
 -- Core keybindings
 map("n", "<leader>e", "<cmd>Ex<CR>", { desc = "File explorer" })
 map("i", "jk", "<Esc>", { desc = "Leave insert mode" })
+-- Visual-mode y yanks straight to the system clipboard (also fills the unnamed
+-- register, so plain p still works). Normal-mode y/yy and deletes are untouched.
+map("x", "y", '"+y', { desc = "Yank selection to system clipboard" })
 map("n", "<leader>tt", "<cmd>NvimTreeToggle<CR>", { desc = "Toggle tree" })
 map("n", "±", toggle_nvimtree_focus, { desc = "Toggle NvimTree focus" })
 map("n", "<F3>", toggle_zoom, { desc = "Toggle zoom split" })
