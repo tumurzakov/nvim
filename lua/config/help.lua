@@ -140,6 +140,8 @@ local plugins_text = [==[
  :Telescope projects   switch project  T    Terminal in folder (keep tree)
  picker: C-n/p move · C-x/C-v split    \T   Terminal in folder (focus it)
          CR open · C-q → quickfix       a d r x c p  add/del/rename/cut/copy
+                                      C-]  set root to folder under cursor
+                                      -  root up · CR/o open · BS fold node
 
  TROUBLE (diagnostics)                 CODECOMPANION (AI)
  \xx \xX  Workspace / buffer diag      C-l  Chat with selection
