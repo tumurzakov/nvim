@@ -34,7 +34,7 @@ local vim_text = [[
                   \sq  Stop speaking
 
  GIT & REVIEW
- gR   Patch review (red/green; r=review e=edit ]q/[q=nav Tab=fold zM/zR=all)
+ gR   Patch review (r=run e=edit X=revert→base ]q/[q=nav Tab/zM/zR=fold)
  \gc  Close review view
  \kd  Drop sel/file:line → Claude kitty tab   \kf  Drop file path
 

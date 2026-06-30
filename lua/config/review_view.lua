@@ -249,6 +249,7 @@ local function setup_diff_keymaps(buf)
     M.codecompanion({ visual = true })
   end, o)
   vim.keymap.set("n", "e", function() M.edit_under_cursor() end, o)
+  vim.keymap.set("n", "X", function() M.revert_under_cursor() end, o)
   vim.keymap.set("n", "?", function() M.show_help() end, o)
   vim.keymap.set("n", "q", function() M.close() end, o)
 end
@@ -333,6 +334,30 @@ local function diff_status(root, merge_base, path)
     end
   end
   return added, changed, dels
+end
+
+-- Parse the merge-base→working-tree diff for `path` into hunks, keeping each
+-- hunk's new-file range (nl .. nl+nc-1) and its removed (base/develop) lines, so
+-- a single change can be reverted to its base state.
+local function parse_hunks(root, merge_base, path)
+  local dl = vim.fn.systemlist({ "git", "-C", root, "diff", "-U0", merge_base, "--", path })
+  local hunks, i = {}, 1
+  while i <= #dl do
+    local nl, nc = dl[i]:match("^@@ %-%d+,?%d* %+(%d+),?(%d*) @@")
+    if nl then
+      nl, nc = tonumber(nl), (nc == "" and 1 or tonumber(nc))
+      local removed, j = {}, i + 1
+      while j <= #dl and not dl[j]:match("^@@") do
+        if dl[j]:sub(1, 1) == "-" then removed[#removed + 1] = dl[j]:sub(2) end
+        j = j + 1
+      end
+      hunks[#hunks + 1] = { nl = nl, nc = nc, removed = removed }
+      i = j
+    else
+      i = i + 1
+    end
+  end
+  return hunks
 end
 
 -- Build (and cache) the review buffer for one file. Default: the WHOLE file with
@@ -760,6 +785,7 @@ local function build_ui(st)
     "",
     "  DIFF PANE",
     "    e       edit file in a tab           C        CodeCompanion (n/v)",
+    "    X       revert change under cursor → base (develop)",
     "    ]q/[q   prev / next finding          R        refresh",
     "    q       close review",
     "",
@@ -882,6 +908,73 @@ function M.context_for(bufnr, r1, r2)
   end
   local lines = vim.api.nvim_buf_get_lines(bufnr, r1 - 1, r2, false)
   return { file = path, l1 = lo, l2 = hi, lines = lines, ft = vim.bo[bufnr].filetype }
+end
+
+-- Revert the change under the cursor back to its base (develop) state: replace
+-- the hunk's new lines with the base version (delete added lines / restore
+-- deleted lines / swap changed lines), write the file, then refresh the overlay.
+-- Modifies the working tree, so it asks for confirmation first.
+function M.revert_under_cursor()
+  if not S then return end
+  local st = S
+  local bufnr = vim.api.nvim_get_current_buf()
+  local path = M.file_for(bufnr)
+  if not path then
+    vim.notify("review_view: cursor is not in a diff buffer", vim.log.levels.WARN)
+    return
+  end
+  local entry = st.current_file
+  local abspath = st.root .. "/" .. path
+  if (entry and (entry.binary or entry.untracked)) or vim.fn.filereadable(abspath) ~= 1 then
+    vim.notify("review_view: revert only supported for tracked text files", vim.log.levels.WARN)
+    return
+  end
+
+  local L = vim.api.nvim_win_get_cursor(0)[1]
+  local hunks = parse_hunks(st.root, st.merge_base, path)
+  local hunk
+  for _, h in ipairs(hunks) do            -- added / changed: cursor inside new range
+    if h.nc > 0 and L >= h.nl and L <= h.nl + h.nc - 1 then hunk = h break end
+  end
+  if not hunk then
+    for _, h in ipairs(hunks) do          -- pure deletion: cursor on the anchor line
+      if h.nc == 0 and (L == h.nl or L == h.nl + 1) then hunk = h break end
+    end
+  end
+  if not hunk then
+    vim.notify("review_view: no change under the cursor to revert", vim.log.levels.INFO)
+    return
+  end
+
+  local what
+  if #hunk.removed == 0 then
+    what = ("discard %d added line(s)"):format(hunk.nc)
+  elseif hunk.nc == 0 then
+    what = ("restore %d deleted line(s)"):format(#hunk.removed)
+  else
+    what = ("restore %d base line(s) over %d changed"):format(#hunk.removed, hunk.nc)
+  end
+  if vim.fn.confirm(("Revert this change to %s?\n  %s"):format(st.base or "base", what), "&Yes\n&No", 2) ~= 1 then
+    return
+  end
+
+  local lines = vim.fn.readfile(abspath)
+  local out = {}
+  if hunk.nc == 0 then
+    -- pure deletion: re-insert the base lines after the anchor line nl
+    for k = 1, hunk.nl do out[#out + 1] = lines[k] end
+    for _, rl in ipairs(hunk.removed) do out[#out + 1] = rl end
+    for k = hunk.nl + 1, #lines do out[#out + 1] = lines[k] end
+  else
+    -- added / changed: replace the new lines [nl, nl+nc-1] with the base lines
+    for k = 1, hunk.nl - 1 do out[#out + 1] = lines[k] end
+    for _, rl in ipairs(hunk.removed) do out[#out + 1] = rl end
+    for k = hunk.nl + hunk.nc, #lines do out[#out + 1] = lines[k] end
+  end
+  vim.fn.writefile(out, abspath)
+  vim.cmd("checktime")                    -- reload the file if it's open elsewhere
+  M.refresh()
+  vim.notify("review_view: reverted change in " .. path, vim.log.levels.INFO)
 end
 
 -- Open the real file shown in the current diff pane in a (reused) edit tab, at
