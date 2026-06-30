@@ -780,8 +780,9 @@ local function build_ui(st)
     "  SIDEBAR (file list)",
     "    ⏎      show diff / fold folder       r        run checkers",
     "    Tab/za  fold folder                  zM/zR    fold / unfold all",
-    "    C       CodeCompanion chat           ]q/[q    prev / next finding",
-    "    R       refresh                      q        close review",
+    "    X       revert WHOLE file → base     C        CodeCompanion chat",
+    "    R       refresh                      ]q/[q    prev / next finding",
+    "    q       close review",
     "",
     "  DIFF PANE",
     "    e       edit file in a tab           C        CodeCompanion (n/v)",
@@ -823,6 +824,7 @@ local function build_ui(st)
   vim.keymap.set("n", "zM", function() fold_all(st, true) end, o)
   vim.keymap.set("n", "zR", function() fold_all(st, false) end, o)
   vim.keymap.set("n", "R", function() M.refresh() end, o)
+  vim.keymap.set("n", "X", function() M.revert_file_under_cursor() end, o)
   vim.keymap.set("n", "C", function() M.codecompanion({ entry = entry_under_cursor() }) end, o)
   vim.keymap.set("n", "?", function() M.show_help() end, o)
   vim.keymap.set("n", "q", M.close, o)
@@ -975,6 +977,43 @@ function M.revert_under_cursor()
   vim.cmd("checktime")                    -- reload the file if it's open elsewhere
   M.refresh()
   vim.notify("review_view: reverted change in " .. path, vim.log.levels.INFO)
+end
+
+-- Revert the WHOLE file under the cursor (in the sidebar) back to its base
+-- (develop) state: restore the base content, or delete it if the file is new in
+-- this branch. Confirms first since it discards every change in that file.
+function M.revert_file_under_cursor()
+  if not S then return end
+  local st = S
+  local e = entry_under_cursor()
+  if not e then
+    vim.notify("review_view: put the cursor on a file in the sidebar", vim.log.levels.WARN)
+    return
+  end
+  local path = e.path
+  local abspath = st.root .. "/" .. path
+
+  vim.fn.systemlist({ "git", "-C", st.root, "cat-file", "-e", st.merge_base .. ":" .. path })
+  local in_base = vim.v.shell_error == 0
+
+  local what = in_base
+    and ("discard ALL changes in " .. path)
+    or ("delete new file " .. path)
+  if vim.fn.confirm(("Revert whole file to %s?\n  %s"):format(st.base or "base", what), "&Yes\n&No", 2) ~= 1 then
+    return
+  end
+
+  if not in_base then
+    vim.fn.delete(abspath)                         -- new file: base had none
+  elseif e.binary then
+    vim.fn.systemlist({ "git", "-C", st.root, "checkout", st.merge_base, "--", path })
+  else
+    local content = vim.fn.systemlist({ "git", "-C", st.root, "show", st.merge_base .. ":" .. path })
+    vim.fn.writefile(content, abspath)
+  end
+  vim.cmd("checktime")
+  M.refresh()
+  vim.notify("review_view: reverted file " .. path, vim.log.levels.INFO)
 end
 
 -- Open the real file shown in the current diff pane in a (reused) edit tab, at
