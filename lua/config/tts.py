@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TTS with word highlighting. Piper (local) → gTTS → macOS."""
+"""TTS with word highlighting. macOS system voice (Ava Premium) → Piper fallback."""
 import sys, os, re, tempfile, subprocess, signal, time, wave
 
 _player = None
@@ -14,6 +14,9 @@ signal.signal(signal.SIGINT, _cleanup)
 
 PIPER_MODEL_DIR = os.path.expanduser("~/.local/share/piper")
 PIPER_MODEL = os.path.join(PIPER_MODEL_DIR, "ryan-high.onnx")
+
+# macOS NSSpeechSynthesizer voice. "Ava (Premium)" — high-quality system voice.
+MACOS_VOICE = "com.apple.voice.premium.en-US.Ava"
 
 
 def _find_words(text):
@@ -150,12 +153,16 @@ def macos_speak(text):
     except ImportError:
         return False
 
-    voice = AppKit.NSSpeechSynthesizer.defaultVoice()
-    if not voice:
-        for v in AppKit.NSSpeechSynthesizer.availableVoices():
-            if "en-US" in v and "compact" in v:
-                voice = v
-                break
+    available = [str(v) for v in AppKit.NSSpeechSynthesizer.availableVoices()]
+    if MACOS_VOICE in available:
+        voice = MACOS_VOICE
+    else:
+        voice = AppKit.NSSpeechSynthesizer.defaultVoice()
+        if not voice:
+            for v in available:  # prefer a premium/enhanced en-US voice
+                if "en-US" in v and ("premium" in v.lower() or "enhanced" in v.lower()):
+                    voice = v
+                    break
     if not voice:
         return False
 
@@ -186,7 +193,7 @@ def main():
     if not text.strip():
         return
 
-    piper_speak(text) or macos_speak(text)
+    macos_speak(text) or piper_speak(text)
 
     sys.stdout.write("DONE\n")
     sys.stdout.flush()

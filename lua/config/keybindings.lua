@@ -1091,7 +1091,7 @@ map({ "n", "v" }, "<leader>tn", run_pytest_nearest, { desc = "Pytest nearest" })
 map("n", "<leader>rx", run_ruff_fix_current_file, { desc = "Ruff check --fix" })
 map("n", "<leader>x", run_current_python_script, { desc = "Run current Python file" })
 
--- Text-to-speech (single engine via tts.py: Piper → macOS system voice).
+-- Text-to-speech (single engine via tts.py: macOS Ava (Premium) → Piper fallback).
 --   F8 (normal): read from cursor paragraph-by-paragraph (auto-advance) with
 --                real-time word highlighting; press again to stop.
 --   F8 / \ss (visual): speak the selection.
