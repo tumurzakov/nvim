@@ -261,6 +261,22 @@ local function hear_stop_timer()
   end
 end
 
+-- SFSpeech capitalizes the first letter of every utterance. When we're
+-- continuing a sentence (the text before the cursor doesn't end a sentence),
+-- lowercase that first letter — but keep "I"/"I'm"/… and true sentence starts.
+local function adjust_case(text)
+  local col = vim.api.nvim_win_get_cursor(0)[2]
+  local before = vim.api.nvim_get_current_line():sub(1, col):gsub("%s+$", "")
+  if before == "" or before:sub(-1):match("[.!?:]") then
+    return text   -- start of line or new sentence → keep capitalization
+  end
+  local first = text:match("^([%a']+)")
+  if first == "I" or (first and first:match("^I['\226]")) then
+    return text   -- keep I / I'm / I've / I'll / I'd
+  end
+  return (text:gsub("^(%a)", string.lower))
+end
+
 -- Commit the settled transcription: insert only the part not yet inserted
 -- (prefix-aware, so punctuation/casing revisions don't duplicate words), then
 -- start a fresh raw buffer for the next utterance.
@@ -276,7 +292,7 @@ local function hear_commit()
   hear_committed = f
   hear_raw = ""
   delta = vim.trim(delta)
-  if delta ~= "" then insert_text(delta) end
+  if delta ~= "" then insert_text(adjust_case(delta)) end
 end
 
 local function hear_update(chunk)
