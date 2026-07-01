@@ -138,7 +138,16 @@ function M.short_explain()
   end
 
   local prompt_lines = {
-    "Explain what is under the cursor or selected in detail.",
+    "Explain the meaning, intent, and implications of what is under the cursor or selected.",
+    "Write for an experienced developer. Skip the obvious: do NOT state that it is a comment, "
+      .. "keyword, variable, or function, do NOT restate the syntax, and do NOT explain basic "
+      .. "language mechanics. If the whole answer would be obvious, say so in one line instead of padding.",
+    "Focus on substance: what it actually refers to, WHY it exists, the domain meaning, the specific "
+      .. "case or edge case it handles, and any non-obvious consequences or gotchas. For a comment, "
+      .. "explain the situation it describes and why that matters — not that it is a comment.",
+    "If the file is on disk, use the read tools to read the surrounding code for real context instead "
+      .. "of guessing. If context is genuinely unavailable, say so in one line and give your best inference.",
+    "Be concise and concrete. Lead with the point, not a preamble.",
     "Never use markdown tables or pipe-separated rows. Use bullet lists or labeled lines instead.",
     "Allowed permissions/tools only: " .. TOOL_PERMISSIONS .. ".",
     "Do not use any other tool, especially container.exec.",
