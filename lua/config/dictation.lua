@@ -220,10 +220,10 @@ local function locale_for(lang)
   return lang == "ru" and "ru-RU" or "en-US"
 end
 
--- macOS native backend: stream `hear` stdout (one final segment per line) into
--- the buffer. Extra args are overridable via settings_local.dictation_hear_args.
+-- macOS native backend: stream `hear -m` (on-device Speech framework), collapse
+-- the \r-refined transcription, and commit each utterance on silence.
+-- Extra hear args are overridable via settings_local.dictation_hear_args.
 local hear_job = nil
-local hear_pending = ""   -- bytes streamed for the current, not-yet-final utterance
 
 -- nvim (launched from a GUI terminal) may not have ~/.local/bin on PATH, so
 -- resolve `hear` explicitly.
@@ -237,16 +237,59 @@ local function hear_cmd()
   return nil
 end
 
--- In single-line (-m) mode hear overwrites the current utterance with \r as it
--- refines/re-punctuates it, and ends the FINAL result with \n. The visible text
--- is the last non-empty \r-delimited segment; inserting only on final avoids the
--- duplication you get from inserting every partial/revision.
+-- hear -m streams the current utterance, overwriting it with \r as it refines
+-- and re-punctuates the text. It does NOT emit a per-utterance final, so we
+-- collapse the \r overwrites to the current line and commit on SILENCE.
 local function last_segment(s)
   local seg = ""
-  for part in (s .. "\r"):gmatch("([^\r]*)\r") do
+  for part in (s:gsub("\n", "\r") .. "\r"):gmatch("([^\r]*)\r") do
     if vim.trim(part) ~= "" then seg = part end
   end
   return vim.trim(seg)
+end
+
+local hear_raw = ""         -- raw \r stream of the current utterance's refinements
+local hear_committed = ""   -- text already inserted (previous committed transcription)
+local hear_timer = nil      -- silence debounce
+local HEAR_SILENCE_MS = 700
+
+local function hear_stop_timer()
+  if hear_timer then
+    hear_timer:stop()
+    hear_timer:close()
+    hear_timer = nil
+  end
+end
+
+-- Commit the settled transcription: insert only the part not yet inserted
+-- (prefix-aware, so punctuation/casing revisions don't duplicate words), then
+-- start a fresh raw buffer for the next utterance.
+local function hear_commit()
+  local f = last_segment(hear_raw)
+  if f == "" then return end
+  local delta
+  if #hear_committed > 0 and #f >= #hear_committed and f:sub(1, #hear_committed) == hear_committed then
+    delta = f:sub(#hear_committed + 1)
+  else
+    delta = f
+  end
+  hear_committed = f
+  hear_raw = ""
+  delta = vim.trim(delta)
+  if delta ~= "" then insert_text(delta) end
+end
+
+local function hear_update(chunk)
+  hear_raw = hear_raw .. chunk                  -- keep raw \r stream (boundary intact)
+  if #hear_raw > 65536 then hear_raw = last_segment(hear_raw) end   -- safety cap
+  show_partial(last_segment(hear_raw))          -- grey live preview (not inserted yet)
+  hear_stop_timer()
+  hear_timer = vim.uv.new_timer()
+  hear_timer:start(HEAR_SILENCE_MS, 0, vim.schedule_wrap(function()
+    hear_stop_timer()
+    hear_commit()
+    clear_partial()
+  end))
 end
 
 local function macos_start()
@@ -257,26 +300,17 @@ local function macos_start()
     return
   end
   current_lang = detect_system_lang()
-  hear_pending = ""
+  hear_raw, hear_committed = "", ""
   local ok, sl = pcall(require, "config.settings_local")
   local extra = (ok and type(sl) == "table" and type(sl.dictation_hear_args) == "table")
     and sl.dictation_hear_args or { "-d", "-p" }   -- on-device + punctuation
-  local cmd = { bin, "-m" }   -- -m: single-line streaming; final result ends with \n
+  local cmd = { bin, "-m" }   -- -m: single-line streaming (refines via \r)
   vim.list_extend(cmd, extra)
   vim.list_extend(cmd, { "-l", locale_for(current_lang) })
 
   hear_job = vim.fn.jobstart(cmd, {
     on_stdout = function(_, data)
-      vim.schedule(function()
-        -- jobstart splits on \n: rejoin the continuation, keep the incomplete tail.
-        data[1] = hear_pending .. data[1]
-        hear_pending = table.remove(data)
-        for _, finalline in ipairs(data) do        -- each element = one FINAL result
-          local text = last_segment(finalline)
-          if text ~= "" then insert_text(text) end
-        end
-        show_partial(last_segment(hear_pending))    -- live preview (not inserted)
-      end)
+      vim.schedule(function() hear_update(table.concat(data, "\n")) end)
     end,
     on_stderr = function(_, data)
       local msg = vim.trim(table.concat(data, " "))
@@ -285,10 +319,14 @@ local function macos_start()
       end
     end,
     on_exit = function(_, code)
+      hear_stop_timer()
       hear_job = nil
-      hear_pending = ""
       is_listening = false
-      clear_partial()
+      vim.schedule(function()
+        hear_commit()          -- flush the last utterance BEFORE resetting state
+        clear_partial()
+        hear_raw, hear_committed = "", ""
+      end)
       if code ~= 0 and code ~= 143 then   -- 143 = SIGTERM (our own stop)
         vim.schedule(function() vim.notify("hear exited (" .. code .. ")", vim.log.levels.ERROR) end)
       end
@@ -304,12 +342,14 @@ local function macos_start()
 end
 
 local function macos_stop()
+  hear_stop_timer()
+  hear_commit()          -- commit whatever was said before stopping
+  clear_partial()
   if hear_job then
     pcall(vim.fn.jobstop, hear_job)
     hear_job = nil
   end
   is_listening = false
-  clear_partial()
 end
 
 local function vosk_start()
