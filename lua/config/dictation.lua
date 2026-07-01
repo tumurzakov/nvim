@@ -223,27 +223,58 @@ end
 -- macOS native backend: stream `hear` stdout (one final segment per line) into
 -- the buffer. Extra args are overridable via settings_local.dictation_hear_args.
 local hear_job = nil
+local hear_text = ""   -- running transcription of the current utterance
+
+-- nvim (launched from a GUI terminal) may not have ~/.local/bin on PATH, so
+-- resolve `hear` explicitly.
+local function hear_cmd()
+  if vim.fn.executable("hear") == 1 then return "hear" end
+  for _, p in ipairs({
+    vim.fn.expand("~/.local/bin/hear"), "/usr/local/bin/hear", "/opt/homebrew/bin/hear",
+  }) do
+    if vim.fn.executable(p) == 1 then return p end
+  end
+  return nil
+end
+
+-- hear streams the GROWING best transcription of the current utterance (each
+-- refinement on its own line). Insert only the delta so text isn't duplicated;
+-- a line that doesn't extend the previous one starts a new utterance.
+local function hear_on_line(line)
+  line = vim.trim(line)
+  if line == "" then return end
+  local delta
+  if #hear_text > 0 and #line >= #hear_text and line:sub(1, #hear_text) == hear_text then
+    delta = line:sub(#hear_text + 1)
+  else
+    delta = line
+  end
+  hear_text = line
+  delta = vim.trim(delta)
+  if delta ~= "" then insert_text(delta) end
+end
 
 local function macos_start()
   if hear_job then return end
-  if vim.fn.executable("hear") == 0 then
-    vim.notify("dictation: 'hear' not found — install with: brew install hear", vim.log.levels.ERROR)
+  local bin = hear_cmd()
+  if not bin then
+    vim.notify("dictation: 'hear' not found on PATH or ~/.local/bin (brew install hear)", vim.log.levels.ERROR)
     return
   end
   current_lang = detect_system_lang()
+  hear_text = ""
   local ok, sl = pcall(require, "config.settings_local")
   local extra = (ok and type(sl) == "table" and type(sl.dictation_hear_args) == "table")
-    and sl.dictation_hear_args or { "-d" }   -- -d = on-device (offline)
-  local cmd = { "hear" }
+    and sl.dictation_hear_args or { "-d", "-p" }   -- on-device + punctuation
+  local cmd = { bin }
   vim.list_extend(cmd, extra)
   vim.list_extend(cmd, { "-l", locale_for(current_lang) })
 
   hear_job = vim.fn.jobstart(cmd, {
     on_stdout = function(_, data)
-      for _, line in ipairs(data) do
-        line = vim.trim(line)
-        if line ~= "" then insert_text(line) end
-      end
+      vim.schedule(function()
+        for _, line in ipairs(data) do hear_on_line(line) end
+      end)
     end,
     on_stderr = function(_, data)
       local msg = vim.trim(table.concat(data, " "))
@@ -253,12 +284,12 @@ local function macos_start()
     end,
     on_exit = function(_, code)
       hear_job = nil
+      hear_text = ""
       is_listening = false
       if code ~= 0 and code ~= 143 then   -- 143 = SIGTERM (our own stop)
         vim.schedule(function() vim.notify("hear exited (" .. code .. ")", vim.log.levels.ERROR) end)
       end
     end,
-    stdout_buffered = false,
   })
   if hear_job <= 0 then
     hear_job = nil

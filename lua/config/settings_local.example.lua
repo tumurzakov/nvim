@@ -71,8 +71,8 @@ M.codecompanion = {
 -- Voice dictation (F10) engine: "vosk" (default, offline model) or "macos"
 -- (on-device Speech framework via the `hear` CLI — `brew install hear`).
 -- M.dictation_engine = "macos"
--- Extra args passed to `hear` for the macos engine (default { "-d" } = on-device).
--- M.dictation_hear_args = { "-d" }   -- e.g. add "-p" for punctuation if supported
+-- Extra args passed to `hear` (default { "-d", "-p" } = on-device + punctuation).
+-- M.dictation_hear_args = { "-d", "-p" }   -- drop "-p" if your locale lacks it
 
 -- Review view (nvim-tree `gR`): red/green patch view of <base>...HEAD with a
 -- file sidebar. Selecting a file (⏎) shows its unified diff and runs ALL the
