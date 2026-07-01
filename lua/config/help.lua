@@ -32,6 +32,7 @@ local vim_text = [[
  F3   Zoom split  F8   Read/stop      \ws  Summarize web page
                   \ss  Speak sel
                   \sq  Stop speaking
+                  F10  Dictate (voice → text)
 
  GIT & REVIEW
  gR   Patch review (r=run e=edit X=revert→base ]q/[q=nav Tab/zM/zR=fold)

@@ -68,6 +68,12 @@ M.codecompanion = {
 -- Base branch used by nvim-tree `gR` (review vs base). Defaults to "main".
 -- M.git_base_branch = "develop"
 
+-- Voice dictation (F10) engine: "vosk" (default, offline model) or "macos"
+-- (on-device Speech framework via the `hear` CLI — `brew install hear`).
+-- M.dictation_engine = "macos"
+-- Extra args passed to `hear` for the macos engine (default { "-d" } = on-device).
+-- M.dictation_hear_args = { "-d" }   -- e.g. add "-p" for punctuation if supported
+
 -- Review view (nvim-tree `gR`): red/green patch view of <base>...HEAD with a
 -- file sidebar. Selecting a file (⏎) shows its unified diff and runs ALL the
 -- checkers below asynchronously; `r` re-runs them. Each checker must print lines

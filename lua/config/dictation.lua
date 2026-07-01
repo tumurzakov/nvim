@@ -1,6 +1,7 @@
--- Vosk streaming dictation plugin for Neovim
--- :DictateToggle (Ctrl+S) — start/stop dictation
+-- Streaming dictation plugin for Neovim
+-- :DictateToggle (F10) — start/stop dictation
 -- :DictateLang ru|en — switch language
+-- Engine via settings_local.dictation_engine: "vosk" (default) or "macos" (hear CLI)
 
 local M = {}
 
@@ -207,7 +208,77 @@ local function stop_lang_poll()
   end
 end
 
-function M.start()
+-- Engine selection: settings_local.dictation_engine = "vosk" (default) | "macos".
+-- "macos" uses the on-device Speech framework via the `hear` CLI (brew install hear).
+local function get_engine()
+  local ok, sl = pcall(require, "config.settings_local")
+  local e = ok and type(sl) == "table" and sl.dictation_engine
+  return (e == "macos" or e == "hear") and "macos" or "vosk"
+end
+
+local function locale_for(lang)
+  return lang == "ru" and "ru-RU" or "en-US"
+end
+
+-- macOS native backend: stream `hear` stdout (one final segment per line) into
+-- the buffer. Extra args are overridable via settings_local.dictation_hear_args.
+local hear_job = nil
+
+local function macos_start()
+  if hear_job then return end
+  if vim.fn.executable("hear") == 0 then
+    vim.notify("dictation: 'hear' not found — install with: brew install hear", vim.log.levels.ERROR)
+    return
+  end
+  current_lang = detect_system_lang()
+  local ok, sl = pcall(require, "config.settings_local")
+  local extra = (ok and type(sl) == "table" and type(sl.dictation_hear_args) == "table")
+    and sl.dictation_hear_args or { "-d" }   -- -d = on-device (offline)
+  local cmd = { "hear" }
+  vim.list_extend(cmd, extra)
+  vim.list_extend(cmd, { "-l", locale_for(current_lang) })
+
+  hear_job = vim.fn.jobstart(cmd, {
+    on_stdout = function(_, data)
+      for _, line in ipairs(data) do
+        line = vim.trim(line)
+        if line ~= "" then insert_text(line) end
+      end
+    end,
+    on_stderr = function(_, data)
+      local msg = vim.trim(table.concat(data, " "))
+      if msg ~= "" then
+        vim.schedule(function() vim.notify("hear: " .. msg, vim.log.levels.WARN) end)
+      end
+    end,
+    on_exit = function(_, code)
+      hear_job = nil
+      is_listening = false
+      if code ~= 0 and code ~= 143 then   -- 143 = SIGTERM (our own stop)
+        vim.schedule(function() vim.notify("hear exited (" .. code .. ")", vim.log.levels.ERROR) end)
+      end
+    end,
+    stdout_buffered = false,
+  })
+  if hear_job <= 0 then
+    hear_job = nil
+    vim.notify("dictation: failed to start hear", vim.log.levels.ERROR)
+    return
+  end
+  is_listening = true
+  vim.notify("🎤 [macos " .. locale_for(current_lang) .. "] Listening...", vim.log.levels.INFO)
+end
+
+local function macos_stop()
+  if hear_job then
+    pcall(vim.fn.jobstop, hear_job)
+    hear_job = nil
+  end
+  is_listening = false
+  clear_partial()
+end
+
+local function vosk_start()
   local sys_lang = detect_system_lang()
   current_lang = sys_lang
   ensure_model(current_lang, function(_)
@@ -219,12 +290,20 @@ function M.start()
   end)
 end
 
-function M.stop()
+local function vosk_stop()
   if not job_id or not is_listening then return end
   vim.fn.chansend(job_id, "stop\n")
   is_listening = false
   stop_lang_poll()
   clear_partial()
+end
+
+function M.start()
+  if get_engine() == "macos" then macos_start() else vosk_start() end
+end
+
+function M.stop()
+  if get_engine() == "macos" then macos_stop() else vosk_stop() end
 end
 
 function M.toggle()
@@ -257,8 +336,12 @@ function M.quit()
     pcall(vim.fn.chansend, job_id, "quit\n")
     pcall(vim.fn.jobstop, job_id)
     job_id = nil
-    is_listening = false
   end
+  if hear_job then
+    pcall(vim.fn.jobstop, hear_job)
+    hear_job = nil
+  end
+  is_listening = false
   clear_partial()
 end
 
