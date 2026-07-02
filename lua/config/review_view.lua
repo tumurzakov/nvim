@@ -85,6 +85,17 @@ local function resolve_base(root)
   return nil, git_base
 end
 
+-- Human repo name: the origin project name (works even for a temp worktree whose
+-- toplevel dir is a random tempname), falling back to the root's basename.
+local function repo_name(root)
+  local ok, url = git(root, { "remote", "get-url", "origin" })
+  if ok and url[1] and url[1] ~= "" then
+    local n = url[1]:gsub("%.git$", ""):match("([^/:]+)$")
+    if n and n ~= "" then return n end
+  end
+  return vim.fn.fnamemodify(root, ":t")
+end
+
 -- A set of path names from a `git` name-only command.
 local function name_set(root, args)
   local ok, out = git(root, args)
@@ -905,6 +916,7 @@ function M.open(path, opts)
   if S then M.close() end
   S = {
     root = root, base = base, head_ref = head_ref, merge_base = merge_base,
+    repo = repo_name(root),
     on_close = opts.on_close,
     files = files, collapsed = {},
     file_bufs = {}, diffs = {}, linemaps = {},  -- per-file caches
@@ -948,7 +960,10 @@ function M.context_for(bufnr, r1, r2)
     end
   end
   local lines = vim.api.nvim_buf_get_lines(bufnr, r1 - 1, r2, false)
-  return { file = path, l1 = lo, l2 = hi, lines = lines, ft = vim.bo[bufnr].filetype }
+  return {
+    file = path, l1 = lo, l2 = hi, lines = lines, ft = vim.bo[bufnr].filetype,
+    repo = S.repo, base = S.base, head = S.head_ref,   -- which repo / branches
+  }
 end
 
 -- Revert the change under the cursor back to its base (develop) state: replace

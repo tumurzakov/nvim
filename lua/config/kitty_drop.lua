@@ -88,6 +88,15 @@ local function review_view()
   return ok and m or nil
 end
 
+-- A "repo `x`, reviewing `base → head`" prefix when the drop comes from a gR
+-- review buffer, so the Claude side knows which repo and branches it is.
+local function review_header(ctx)
+  if ctx and ctx.repo and ctx.base and ctx.head then
+    return ("repo `%s`, reviewing `%s → %s`"):format(ctx.repo, ctx.base, ctx.head)
+  end
+  return nil
+end
+
 -- Repo-relative path for a buffer: its real filename, or — for a gR diff scratch
 -- buffer — the file that diff belongs to.
 local function relpath(bufnr)
@@ -113,7 +122,12 @@ function M.send_lineref()
   local rv = review_view()
   local ctx = rv and rv.context_for and rv.context_for(buf, row, row) or nil
   if ctx then
-    M.send(("`%s:%d`"):format(ctx.file, ctx.l1 or row))
+    local hdr = review_header(ctx)
+    if hdr then
+      M.send(("%s — `%s:%d`"):format(hdr, ctx.file, ctx.l1 or row))
+    else
+      M.send(("`%s:%d`"):format(ctx.file, ctx.l1 or row))
+    end
     return
   end
   local p = relpath(buf)
@@ -146,11 +160,14 @@ function M.send_visual()
     ft = vim.bo.filetype ~= "" and vim.bo.filetype or ""
     lo, hi = l1, l2
   end
-  local body = table.concat({
+  local parts = {}
+  local hdr = review_header(ctx)
+  if hdr then table.insert(parts, hdr) end
+  vim.list_extend(parts, {
     ("In `%s` (lines %d-%d):"):format(file, lo, hi),
     "```" .. ft, table.concat(lines, "\n"), "```", "",
-  }, "\n")
-  M.send(body)
+  })
+  M.send(table.concat(parts, "\n"))
 end
 
 return M
