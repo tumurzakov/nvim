@@ -249,6 +249,7 @@ local function setup_diff_keymaps(buf)
     M.codecompanion({ visual = true })
   end, o)
   vim.keymap.set("n", "e", function() M.edit_under_cursor() end, o)
+  vim.keymap.set("n", "r", function() M.run_checkers_current() end, o)
   vim.keymap.set("n", "X", function() M.revert_under_cursor() end, o)
   vim.keymap.set("n", "?", function() M.show_help() end, o)
   vim.keymap.set("n", "q", function() M.close() end, o)
@@ -666,6 +667,16 @@ local function run_checkers(st, entry, opts)
   end
 end
 
+-- Run the checkers on the file currently shown in the diff pane (the `r` key
+-- there mirrors `r` in the sidebar).
+function M.run_checkers_current()
+  if not S or not S.current_file then
+    vim.notify("review_view: no file shown to check", vim.log.levels.WARN)
+    return
+  end
+  run_checkers(S, S.current_file, { force = true })
+end
+
 -- Returns true if a review view was open and got closed, false otherwise.
 function M.close()
   if not S then return false end
@@ -786,6 +797,7 @@ local function build_ui(st)
     "",
     "  DIFF PANE",
     "    e       edit file in a tab           C        CodeCompanion (n/v)",
+    "    r       run checkers on this file",
     "    X       revert change under cursor → base (develop)",
     "    ]q/[q   prev / next finding          R        refresh",
     "    q       close review",
