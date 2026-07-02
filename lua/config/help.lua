@@ -137,7 +137,7 @@ local plugins_text = [==[
  TELESCOPE (fuzzy find)                NVIM-TREE  (\tt toggle · ±/`/§ focus)
  \ff  Find files                       P    Preview (keep focus in tree)
  \fg  Live grep                        t    Open node in new tab
- \fb  Buffers                          gb   Git branch popup
+ \fb  Buffers                          gb   Git branch popup · gB switch
  \fh  Help tags                        gR   Red / green patch review
  :Telescope projects   switch project  T    Terminal in folder (keep tree)
  picker: C-n/p move · C-x/C-v split    \T   Terminal in folder (focus it)
