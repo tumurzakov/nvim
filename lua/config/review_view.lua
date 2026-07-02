@@ -687,6 +687,7 @@ end
 -- Returns true if a review view was open and got closed, false otherwise.
 function M.close()
   if not S then return false end
+  local on_close = S.on_close
   vim.diagnostic.reset(NS)
   if S.tabpage and vim.api.nvim_tabpage_is_valid(S.tabpage) and #vim.api.nvim_list_tabpages() > 1 then
     pcall(vim.cmd, "tabclose")
@@ -698,6 +699,7 @@ function M.close()
     if b and vim.api.nvim_buf_is_valid(b) then pcall(vim.api.nvim_buf_delete, b, { force = true }) end
   end
   S = nil
+  if on_close then pcall(on_close) end
   return true
 end
 
@@ -861,7 +863,10 @@ local function refresh_base(root, base)
 end
 
 -- Open the review view for the repo containing `path` (file or directory).
-function M.open(path)
+-- opts.head_label overrides the displayed HEAD name (e.g. a detached MR review);
+-- opts.on_close is called when the view is closed (e.g. to remove a worktree).
+function M.open(path, opts)
+  opts = opts or {}
   local dir = path and vim.fn.isdirectory(path) == 1 and path
     or (path and vim.fn.fnamemodify(path, ":h"))
     or vim.fn.getcwd()
@@ -884,7 +889,8 @@ function M.open(path)
   refresh_base(root, base)
 
   local okb, branch = git(root, { "symbolic-ref", "--short", "HEAD" })
-  local head_ref = (okb and branch[1] and branch[1] ~= "") and branch[1] or "HEAD"
+  local head_ref = opts.head_label
+    or ((okb and branch[1] and branch[1] ~= "") and branch[1] or "HEAD")
 
   local okm, mb = git(root, { "merge-base", base, "HEAD" })
   local merge_base = (okm and mb[1] and mb[1] ~= "") and mb[1] or base
@@ -899,6 +905,7 @@ function M.open(path)
   if S then M.close() end
   S = {
     root = root, base = base, head_ref = head_ref, merge_base = merge_base,
+    on_close = opts.on_close,
     files = files, collapsed = {},
     file_bufs = {}, diffs = {}, linemaps = {},  -- per-file caches
     items = {},                                 -- accumulated quickfix items (tagged _file/_checker)

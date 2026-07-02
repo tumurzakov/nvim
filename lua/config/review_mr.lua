@@ -36,6 +36,31 @@ local function git(root, args)
   return vim.v.shell_error == 0, out
 end
 
+-- Throwaway review worktrees: removed when the review closes, and on nvim exit.
+local active_worktrees = {}   -- wtdir -> root
+local cleanup_registered = false
+
+local function remove_worktree(root, wtdir)
+  vim.fn.system({ "git", "-C", root, "worktree", "remove", "--force", wtdir })
+end
+
+local function track_worktree(root, wtdir)
+  active_worktrees[wtdir] = root
+  if not cleanup_registered then
+    cleanup_registered = true
+    vim.api.nvim_create_autocmd("VimLeavePre", {
+      callback = function()
+        for wt, rt in pairs(active_worktrees) do pcall(remove_worktree, rt, wt) end
+      end,
+    })
+  end
+end
+
+local function untrack_worktree(root, wtdir)
+  active_worktrees[wtdir] = nil
+  pcall(remove_worktree, root, wtdir)
+end
+
 -- If `dir` is inside a git repo whose origin contains the MR project `path`,
 -- return that repo's toplevel; else nil.
 local function origin_matches(dir, path)
@@ -111,15 +136,6 @@ function M.review(arg)
     end
   end
 
-  -- Guard the user's uncommitted work: checking out the MR would move HEAD.
-  local _, dirty = git(root, { "status", "--porcelain" })
-  if #dirty > 0 then
-    if vim.fn.confirm("Working tree has uncommitted changes.\nChecking out the MR will move HEAD. Continue?",
-      "&No\n&Yes", 1) ~= 2 then
-      return
-    end
-  end
-
   local base = base_branch()
   vim.notify(("ReviewMR: fetching merge request !%d ..."):format(iid), vim.log.levels.INFO)
 
@@ -136,23 +152,27 @@ function M.review(arg)
   end
   sha = sha[1]
 
-  -- 2) refresh the base so the review diffs against an up-to-date develop
-  git(root, { "fetch", "origin", base })
-
-  -- 3) check the MR head out as a local branch
-  local branch = "mr-" .. iid
-  local ok_c, out_c = git(root, { "checkout", "-B", branch, sha })
-  if not ok_c then
-    vim.notify("ReviewMR: checkout failed:\n" .. table.concat(out_c, "\n"), vim.log.levels.ERROR)
+  -- 2) check the MR out in a THROWAWAY detached worktree so the user's real
+  --    working folder / branch is never touched. Removed when the review closes.
+  local wtdir = vim.fn.tempname()
+  local ok_w, out_w = git(root, { "worktree", "add", "--detach", wtdir, sha })
+  if not ok_w then
+    vim.notify("ReviewMR: worktree add failed:\n" .. table.concat(out_w, "\n"), vim.log.levels.ERROR)
     return
   end
+  track_worktree(root, wtdir)
 
-  -- 4) open the red/green review view (diffs branch vs base)
+  -- 3) review the worktree (vs base). It diffs against develop, which
+  --    review_view refreshes from origin on open.
+  local branch = "mr-" .. iid
   local rv = require("config.review_view")
   pcall(rv.close)
-  rv.open(root)
-  vim.notify(("ReviewMR: reviewing !%d on '%s' vs '%s' (%s)"):format(
-    iid, branch, base, vim.fn.fnamemodify(root, ":t")), vim.log.levels.INFO)
+  rv.open(wtdir, {
+    head_label = branch,
+    on_close = function() untrack_worktree(root, wtdir) end,
+  })
+  vim.notify(("ReviewMR: reviewing !%d (%s) vs %s — working folder untouched"):format(iid, branch, base),
+    vim.log.levels.INFO)
 end
 
 vim.api.nvim_create_user_command("ReviewMR", function(o) M.review(o.args) end, {
