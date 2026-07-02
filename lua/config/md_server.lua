@@ -83,11 +83,19 @@ function M.open()
 
   local url = string.format("http://%s:%d/", HOST, PORT)
   local file = vim.fn.expand("%:p")
-  if file ~= "" and state.root then
-    local rel = vim.fn.fnamemodify(file, ":.")
-    -- ":." is relative to cwd; if the file is under root it won't be absolute.
-    if not rel:match("^/") and rel ~= "" then
-      url = url .. url_encode_path(rel)
+  local root = state.root and state.root:gsub("/+$", "")
+  if file ~= "" and root then
+    -- The path MUST be relative to the server root (nvim's startup cwd), not the
+    -- current cwd — nvim-tree / :cd can move cwd and drop path segments, which
+    -- produced a wrong URL and a "Not found".
+    if file == root then
+      -- root index; leave url as "/"
+    elseif vim.startswith(file, root .. "/") then
+      url = url .. url_encode_path(file:sub(#root + 2))
+    else
+      vim.notify("[md] file is outside the served root:\n  " .. root
+        .. "\n(server was rooted at nvim's startup dir; :cd there or restart nvim)",
+        vim.log.levels.WARN)
     end
   end
 

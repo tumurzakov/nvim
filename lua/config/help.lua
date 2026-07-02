@@ -29,8 +29,8 @@ local vim_text = [[
  F4 / C-\ m  Switch terminal (picker → right window; works in term too)
 
  WINDOW           SPEECH               WEB
- F3   Zoom split  F8   Read/stop      \ws  Summarize web page
-                  \ss  Speak sel
+ F3   Zoom split  F8   Read/stop      \mm  Markdown → browser
+                  \ss  Speak sel     \ms  Stop md server
                   \sq  Stop speaking
                   F10  Dictate (voice → text)
 
