@@ -158,7 +158,7 @@ local function render_sidebar(buf, st)
   local dir_index = {}    -- row -> dir name (header rows)
   local hi = {}           -- { row, kind, [col_a, col_b] } highlight ops
 
-  table.insert(lines, ("%s → working tree  (%d files)"):format(st.base, #st.files))
+  table.insert(lines, ("%s → %s  (%d files)"):format(st.base, st.head_ref, #st.files))
   table.insert(lines, "● uncommitted   + new   (blank = committed)")
   table.insert(lines, "? help   q quit   R reload   C chat")
   table.insert(lines, "")
@@ -851,6 +851,15 @@ local function build_ui(st)
   vim.keymap.set("n", "[q", function() M.qf_prev() end, o)
 end
 
+-- Bring the base branch up to its origin state so the review is against the
+-- latest develop. Best-effort: refresh origin/<base>, then fast-forward the local
+-- branch ref (git skips it automatically if <base> is checked out or not a ff).
+local function refresh_base(root, base)
+  local branch = base:gsub("^origin/", "")
+  git(root, { "fetch", "origin", branch })
+  git(root, { "fetch", "origin", branch .. ":" .. branch })
+end
+
 -- Open the review view for the repo containing `path` (file or directory).
 function M.open(path)
   local dir = path and vim.fn.isdirectory(path) == 1 and path
@@ -869,6 +878,10 @@ function M.open(path)
     vim.notify("review_view: no base branch found", vim.log.levels.WARN)
     return
   end
+
+  -- Pull the base branch (develop) up to origin before diffing.
+  vim.notify("review_view: updating " .. base .. " from origin...", vim.log.levels.INFO)
+  refresh_base(root, base)
 
   local okb, branch = git(root, { "symbolic-ref", "--short", "HEAD" })
   local head_ref = (okb and branch[1] and branch[1] ~= "") and branch[1] or "HEAD"
