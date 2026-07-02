@@ -16,7 +16,7 @@
 
 local M = {}
 
-local MAX_DIFF_CHARS = 7000
+local MAX_DIFF_CHARS = 16000
 local NS = vim.api.nvim_create_namespace("review_view")          -- diagnostics
 local HL_NS = vim.api.nvim_create_namespace("review_view_hl")    -- +/- line backgrounds
 local SIDE_NS = vim.api.nvim_create_namespace("review_view_side") -- sidebar headers/counts
@@ -587,7 +587,14 @@ local function run_checkers(st, entry, opts)
   -- prompt body (for input="prompt" checkers)
   local rc = require("config.review_context")
   local pdiff = diff
-  if #pdiff > MAX_DIFF_CHARS then pdiff = pdiff:sub(1, MAX_DIFF_CHARS) .. "\n[...truncated]" end
+  if #pdiff > MAX_DIFF_CHARS then
+    -- Cut back to the last COMPLETE line so we never split a token mid-line
+    -- (a mid-token cut made the AI report false "incomplete code" syntax errors).
+    local cut = pdiff:sub(1, MAX_DIFF_CHARS)
+    cut = cut:sub(1, (cut:match(".*()\n") or (#cut + 1)) - 1)
+    pdiff = cut .. "\n[... diff truncated for length. Do NOT report syntax errors, "
+      .. "unbalanced/unclosed brackets, or 'incomplete code' caused by this cut-off. ...]"
+  end
   local subjects = rc.format_subjects(rc.commit_subjects(st.root, st.merge_base, "HEAD", 10))
   local pparts = { REVIEW_PROMPT, "" }
   if subjects then table.insert(pparts, "Commits:"); table.insert(pparts, subjects); table.insert(pparts, "") end
