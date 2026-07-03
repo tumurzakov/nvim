@@ -707,8 +707,39 @@ function M.run_checkers_current()
   run_checkers(S, S.current_file, { force = true })
 end
 
--- Push the current branch to origin (P). Refuses on a detached HEAD (e.g. a
--- ReviewMR worktree review — there's no branch to push). Confirms first.
+-- Push the current branch to the remote; force uses --force-with-lease (safe
+-- force). On a non-fast-forward rejection of a normal push, offers to force.
+local function push_branch(root, remote, branch, force)
+  local args = { "git", "-C", root, "push" }
+  if force then args[#args + 1] = "--force-with-lease" end
+  vim.list_extend(args, { "-u", remote, branch })
+  vim.notify(("review_view: %spushing %s to %s..."):format(force and "force-" or "", branch, remote),
+    vim.log.levels.INFO)
+  vim.system(args, { text = true }, function(res)
+    vim.schedule(function()
+      if res.code == 0 then
+        vim.notify(("review_view: %spushed %s → %s"):format(force and "force-" or "", branch, remote),
+          vim.log.levels.INFO)
+        return
+      end
+      local err = vim.trim((res.stderr or "") .. (res.stdout or ""))
+      local rejected = err:match("non%-fast%-forward") or err:match("%[rejected%]")
+        or err:match("fetch first") or err:match("force")
+      if not force and rejected then
+        if vim.fn.confirm("Push rejected — remote has diverged.\nForce-push (with lease)?",
+          "&No\n&Yes", 1) == 2 then
+          push_branch(root, remote, branch, true)
+          return
+        end
+      end
+      vim.notify("review_view: push failed:\n" .. err, vim.log.levels.ERROR)
+    end)
+  end)
+end
+
+-- Push the current branch to the remote (P). Refuses on a detached HEAD (e.g. a
+-- ReviewMR worktree review — there's no branch to push). Confirms first, with a
+-- Force-push option.
 function M.push()
   if not S then return end
   local root = S.root
@@ -719,18 +750,13 @@ function M.push()
     return
   end
   local remote = remote_name()
-  if vim.fn.confirm(("Push '%s' to %s?"):format(branch, remote), "&Yes\n&No", 2) ~= 1 then return end
-  vim.notify(("review_view: pushing %s to %s..."):format(branch, remote), vim.log.levels.INFO)
-  vim.system({ "git", "-C", root, "push", "-u", remote, branch }, { text = true }, function(res)
-    vim.schedule(function()
-      if res.code == 0 then
-        vim.notify(("review_view: pushed %s → %s"):format(branch, remote), vim.log.levels.INFO)
-      else
-        vim.notify("review_view: push failed:\n" .. vim.trim((res.stderr or "") .. (res.stdout or "")),
-          vim.log.levels.ERROR)
-      end
-    end)
-  end)
+  local choice = vim.fn.confirm(("Push '%s' to %s?"):format(branch, remote),
+    "&Push\n&Force-push\n&Cancel", 1)
+  if choice == 1 then
+    push_branch(root, remote, branch, false)
+  elseif choice == 2 then
+    push_branch(root, remote, branch, true)
+  end
 end
 
 -- Returns true if a review view was open and got closed, false otherwise.
