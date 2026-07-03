@@ -68,6 +68,10 @@ M.codecompanion = {
 -- Base branch used by nvim-tree `gR` (review vs base). Defaults to "main".
 -- M.git_base_branch = "develop"
 
+-- Git remote used for fetch/push in gR (P), ReviewMR, and the gB branch
+-- switcher. Defaults to "origin".
+-- M.git_remote = "origin"
+
 -- Voice dictation (F10) engine: "vosk" (default, offline model) or "macos"
 -- (on-device Speech framework via the `hear` CLI — `brew install hear`).
 -- M.dictation_engine = "macos"

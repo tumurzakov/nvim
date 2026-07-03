@@ -61,26 +61,33 @@ local function git(root, args)
   return vim.v.shell_error == 0, out
 end
 
+-- The remote to fetch/push against. Configurable via settings_local.git_remote.
+local function remote_name()
+  local ok, sl = pcall(require, "config.settings_local")
+  return (ok and type(sl) == "table" and sl.git_remote) or "origin"
+end
+
 -- Mirror of tree.lua resolve_base: try git_base, then main/master/develop and
 -- their origin/ variants, finally origin/HEAD.
 local function resolve_base(root)
   local ok, settings_local = pcall(require, "config.settings_local")
   local git_base = (ok and type(settings_local) == "table" and settings_local.git_base_branch) or "main"
+  local remote = remote_name()
   local function verify(ref)
     vim.fn.systemlist({ "git", "-C", root, "rev-parse", "--verify", "--quiet", ref })
     return vim.v.shell_error == 0
   end
-  local candidates = { git_base, "origin/" .. git_base }
+  local candidates = { git_base, remote .. "/" .. git_base }
   for _, b in ipairs({ "main", "master", "develop" }) do
     if b ~= git_base then
       table.insert(candidates, b)
-      table.insert(candidates, "origin/" .. b)
+      table.insert(candidates, remote .. "/" .. b)
     end
   end
   for _, c in ipairs(candidates) do
     if verify(c) then return c, git_base end
   end
-  local okh, out = git(root, { "symbolic-ref", "--short", "refs/remotes/origin/HEAD" })
+  local okh, out = git(root, { "symbolic-ref", "--short", "refs/remotes/" .. remote .. "/HEAD" })
   if okh and out[1] and out[1] ~= "" then return out[1], git_base end
   return nil, git_base
 end
@@ -88,7 +95,7 @@ end
 -- Human repo name: the origin project name (works even for a temp worktree whose
 -- toplevel dir is a random tempname), falling back to the root's basename.
 local function repo_name(root)
-  local ok, url = git(root, { "remote", "get-url", "origin" })
+  local ok, url = git(root, { "remote", "get-url", remote_name() })
   if ok and url[1] and url[1] ~= "" then
     local n = url[1]:gsub("%.git$", ""):match("([^/:]+)$")
     if n and n ~= "" then return n end
@@ -265,6 +272,7 @@ local function setup_diff_keymaps(buf)
   end, o)
   vim.keymap.set("n", "e", function() M.edit_under_cursor() end, o)
   vim.keymap.set("n", "r", function() M.run_checkers_current() end, o)
+  vim.keymap.set("n", "P", function() M.push() end, o)
   vim.keymap.set("n", "X", function() M.revert_under_cursor() end, o)
   vim.keymap.set("n", "?", function() M.show_help() end, o)
   vim.keymap.set("n", "q", function() M.close() end, o)
@@ -699,6 +707,32 @@ function M.run_checkers_current()
   run_checkers(S, S.current_file, { force = true })
 end
 
+-- Push the current branch to origin (P). Refuses on a detached HEAD (e.g. a
+-- ReviewMR worktree review — there's no branch to push). Confirms first.
+function M.push()
+  if not S then return end
+  local root = S.root
+  local ok, br = git(root, { "symbolic-ref", "--quiet", "--short", "HEAD" })
+  local branch = ok and br[1] or nil
+  if not branch or branch == "" then
+    vim.notify("review_view: HEAD is detached (MR review?) — nothing to push", vim.log.levels.WARN)
+    return
+  end
+  local remote = remote_name()
+  if vim.fn.confirm(("Push '%s' to %s?"):format(branch, remote), "&Yes\n&No", 2) ~= 1 then return end
+  vim.notify(("review_view: pushing %s to %s..."):format(branch, remote), vim.log.levels.INFO)
+  vim.system({ "git", "-C", root, "push", "-u", remote, branch }, { text = true }, function(res)
+    vim.schedule(function()
+      if res.code == 0 then
+        vim.notify(("review_view: pushed %s → %s"):format(branch, remote), vim.log.levels.INFO)
+      else
+        vim.notify("review_view: push failed:\n" .. vim.trim((res.stderr or "") .. (res.stdout or "")),
+          vim.log.levels.ERROR)
+      end
+    end)
+  end)
+end
+
 -- Returns true if a review view was open and got closed, false otherwise.
 function M.close()
   if not S then return false end
@@ -816,12 +850,12 @@ local function build_ui(st)
     "    ⏎      show diff / fold folder       r        run checkers",
     "    Tab/za  fold folder                  zM/zR    fold / unfold all",
     "    X       revert WHOLE file → base     C        CodeCompanion chat",
-    "    R       refresh                      ]q/[q    prev / next finding",
-    "    q       close review",
+    "    P       push branch to remote        R        refresh",
+    "    q       close review                 ]q/[q    prev / next finding",
     "",
     "  DIFF PANE",
     "    e       edit file in a tab           C        CodeCompanion (n/v)",
-    "    r       run checkers on this file",
+    "    r       run checkers on this file    P        push branch to remote",
     "    X       revert change under cursor → base (develop)",
     "    ]q/[q   prev / next finding          R        refresh",
     "    q       close review",
@@ -860,6 +894,7 @@ local function build_ui(st)
   vim.keymap.set("n", "zM", function() fold_all(st, true) end, o)
   vim.keymap.set("n", "zR", function() fold_all(st, false) end, o)
   vim.keymap.set("n", "R", function() M.refresh() end, o)
+  vim.keymap.set("n", "P", function() M.push() end, o)
   vim.keymap.set("n", "X", function() M.revert_file_under_cursor() end, o)
   vim.keymap.set("n", "C", function() M.codecompanion({ entry = entry_under_cursor() }) end, o)
   vim.keymap.set("n", "?", function() M.show_help() end, o)
@@ -872,9 +907,10 @@ end
 -- latest develop. Best-effort: refresh origin/<base>, then fast-forward the local
 -- branch ref (git skips it automatically if <base> is checked out or not a ff).
 local function refresh_base(root, base)
-  local branch = base:gsub("^origin/", "")
-  git(root, { "fetch", "origin", branch })
-  git(root, { "fetch", "origin", branch .. ":" .. branch })
+  local remote = remote_name()
+  local branch = base:gsub("^" .. remote .. "/", "")
+  git(root, { "fetch", remote, branch })
+  git(root, { "fetch", remote, branch .. ":" .. branch })
 end
 
 -- Open the review view for the repo containing `path` (file or directory).

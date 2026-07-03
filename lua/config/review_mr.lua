@@ -20,6 +20,11 @@ local function base_branch()
   return (ok and type(sl) == "table" and sl.git_base_branch) or "develop"
 end
 
+local function remote_name()
+  local ok, sl = pcall(require, "config.settings_local")
+  return (ok and type(sl) == "table" and sl.git_remote) or "origin"
+end
+
 local function repo_root()
   local file = vim.api.nvim_buf_get_name(0)
   local dir = (file ~= "" and vim.fn.filereadable(file) == 1)
@@ -66,7 +71,7 @@ end
 local function origin_matches(dir, path)
   local ok, top = git(dir, { "rev-parse", "--show-toplevel" })
   if not ok or not top[1] or top[1] == "" then return nil end
-  local ok2, o = git(top[1], { "remote", "get-url", "origin" })
+  local ok2, o = git(top[1], { "remote", "get-url", remote_name() })
   if ok2 and o[1] and o[1]:find(path, 1, true) then return top[1] end
   return nil
 end
@@ -140,7 +145,7 @@ function M.review(arg)
   vim.notify(("ReviewMR: fetching merge request !%d ..."):format(iid), vim.log.levels.INFO)
 
   -- 1) fetch the MR head (GitLab exposes it at refs/merge-requests/<iid>/head)
-  local ok_f, out_f = git(root, { "fetch", "origin", ("merge-requests/%d/head"):format(iid) })
+  local ok_f, out_f = git(root, { "fetch", remote_name(), ("merge-requests/%d/head"):format(iid) })
   if not ok_f then
     vim.notify("ReviewMR: fetch failed:\n" .. table.concat(out_f, "\n"), vim.log.levels.ERROR)
     return

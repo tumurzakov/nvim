@@ -16,6 +16,11 @@ local function repo_root(dir)
   return nil
 end
 
+local function remote_name()
+  local ok, sl = pcall(require, "config.settings_local")
+  return (ok and type(sl) == "table" and sl.git_remote) or "origin"
+end
+
 -- Local branches first, then origin/* branches without a local counterpart.
 local function branches(root)
   local cur
@@ -29,10 +34,11 @@ local function branches(root)
       if b ~= "" then list[#list + 1] = { name = b, kind = "local" }; seen[b] = true end
     end
   end
-  local okr, remotes = git(root, { "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin" })
+  local remote = remote_name()
+  local okr, remotes = git(root, { "for-each-ref", "--format=%(refname:short)", "refs/remotes/" .. remote })
   if okr then
     for _, b in ipairs(remotes) do
-      local short = b:gsub("^origin/", "")
+      local short = b:gsub("^" .. remote .. "/", "")
       if b ~= "" and short ~= "HEAD" and not seen[short] then
         list[#list + 1] = { name = short, kind = "remote" }; seen[short] = true
       end

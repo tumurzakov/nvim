@@ -35,7 +35,7 @@ local vim_text = [[
                   F10  Dictate (voice → text)
 
  GIT & REVIEW
- gR   Patch review (r=run e=edit X=revert→base ]q/[q=nav Tab/zM/zR=fold)
+ gR   Patch review (r=run e=edit P=push X=revert ]q/[q=nav Tab/zM/zR=fold)
  :ReviewMR <gitlab-mr-url>  fetch peer MR → gR vs develop
  \gc  Close review view
  \kd  Drop sel/file:line → Claude kitty tab   \kf  Drop file path
