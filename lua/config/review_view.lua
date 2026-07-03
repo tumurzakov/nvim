@@ -169,6 +169,8 @@ local function render_sidebar(buf, st)
   local dir_index = {}    -- row -> dir name (header rows)
   local hi = {}           -- { row, kind, [col_a, col_b] } highlight ops
 
+  table.insert(lines, " " .. (st.repo or "?"))
+  table.insert(hi, { row = #lines - 1, kind = "repo" })
   table.insert(lines, ("%s → %s  (%d files)"):format(st.base, st.head_ref, #st.files))
   table.insert(lines, "● uncommitted   + new   (blank = committed)")
   table.insert(lines, "? help   q quit   R reload   C chat")
@@ -226,6 +228,8 @@ local function render_sidebar(buf, st)
   for _, h in ipairs(hi) do
     if h.kind == "dir" then
       vim.api.nvim_buf_set_extmark(buf, SIDE_NS, h.row, 0, { end_row = h.row + 1, hl_group = "ReviewViewDir" })
+    elseif h.kind == "repo" then
+      vim.api.nvim_buf_set_extmark(buf, SIDE_NS, h.row, 0, { end_row = h.row + 1, hl_group = "Title" })
     elseif h.kind == "add" then
       vim.api.nvim_buf_set_extmark(buf, SIDE_NS, h.row, h.a, { end_col = h.b, hl_group = "ReviewViewAdd" })
     elseif h.kind == "del" then
@@ -930,7 +934,7 @@ function M.open(path, opts)
   -- No file is shown on open (empty placeholder) so nothing runs until selection.
   if vim.api.nvim_win_is_valid(S.sidebar_win) then
     vim.api.nvim_set_current_win(S.sidebar_win)
-    pcall(vim.api.nvim_win_set_cursor, S.sidebar_win, { 5, 0 })
+    pcall(vim.api.nvim_win_set_cursor, S.sidebar_win, { 6, 0 })
   end
 end
 
