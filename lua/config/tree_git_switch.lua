@@ -21,34 +21,40 @@ local function remote_name()
   return (ok and type(sl) == "table" and sl.git_remote) or "origin"
 end
 
--- Local branches first, then origin/* branches without a local counterpart.
+-- Branches sorted by most recent commit (stale ones sink to the end); a local
+-- branch shadows its remote counterpart; the current branch is pinned on top.
 local function branches(root)
   local cur
   local okc, c = git(root, { "symbolic-ref", "--quiet", "--short", "HEAD" })
   if okc and c[1] and c[1] ~= "" then cur = c[1] end
 
-  local list, seen = {}, {}
-  local okl, locals = git(root, { "for-each-ref", "--format=%(refname:short)", "refs/heads" })
-  if okl then
-    for _, b in ipairs(locals) do
-      if b ~= "" then list[#list + 1] = { name = b, kind = "local" }; seen[b] = true end
-    end
-  end
   local remote = remote_name()
-  local okr, remotes = git(root, { "for-each-ref", "--format=%(refname:short)", "refs/remotes/" .. remote })
-  if okr then
-    for _, b in ipairs(remotes) do
-      local short = b:gsub("^" .. remote .. "/", "")
-      if b ~= "" and short ~= "HEAD" and not seen[short] then
-        list[#list + 1] = { name = short, kind = "remote" }; seen[short] = true
+  -- refs/heads sort before refs/remotes (alphabetical refname), so locals are
+  -- seen first and win the dedup.
+  local ok, refs = git(root, {
+    "for-each-ref", "--format=%(refname)%09%(committerdate:unix)",
+    "refs/heads", "refs/remotes/" .. remote,
+  })
+  local byname = {}
+  if ok then
+    for _, line in ipairs(refs) do
+      local ref, date = line:match("^(.-)\t(%d+)$")
+      date = tonumber(date) or 0
+      local lname = ref and ref:match("^refs/heads/(.+)$")
+      local rname = ref and ref:match("^refs/remotes/" .. remote .. "/(.+)$")
+      if lname then
+        byname[lname] = { name = lname, kind = "local", date = date }
+      elseif rname and rname ~= "HEAD" and not byname[rname] then
+        byname[rname] = { name = rname, kind = "remote", date = date }
       end
     end
   end
 
+  local list = {}
+  for _, v in pairs(byname) do list[#list + 1] = v end
   table.sort(list, function(a, b)
-    local ar = (a.name == cur) and 0 or (a.kind == "local" and 1 or 2)
-    local br = (b.name == cur) and 0 or (b.kind == "local" and 1 or 2)
-    if ar ~= br then return ar < br end
+    if (a.name == cur) ~= (b.name == cur) then return a.name == cur end   -- current on top
+    if a.date ~= b.date then return a.date > b.date end                   -- most recent first
     return a.name < b.name
   end)
   return list, cur
