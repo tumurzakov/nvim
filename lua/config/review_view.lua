@@ -1007,7 +1007,6 @@ function M.open(path, opts)
   end
 
   -- Pull the base branch (develop) up to origin before diffing.
-  vim.notify("review_view: updating " .. base .. " from origin...", vim.log.levels.INFO)
   refresh_base(root, base)
 
   local okb, branch = git(root, { "symbolic-ref", "--short", "HEAD" })
@@ -1043,6 +1042,8 @@ function M.open(path, opts)
     vim.api.nvim_set_current_win(S.sidebar_win)
     pcall(vim.api.nvim_win_set_cursor, S.sidebar_win, { 6, 0 })
   end
+  vim.notify(("review_view: %s   %s → %s   (%d files)"):format(S.repo, base, head_ref, #files),
+    vim.log.levels.INFO)
 end
 
 -- Repo-relative path of the file whose diff buffer is `bufnr`, or nil.
