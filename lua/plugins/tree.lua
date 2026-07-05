@@ -43,10 +43,10 @@ return {
         -- оставляем "p" под дефолтный paste (нужно для c + p),
         -- а preview переносим на "P"
         vim.keymap.set("n", "P", api.node.open.preview_no_picker, opts("Preview (keep focus)"))
-        -- "gb" => add distance from origin's default branch to the git popup
-        vim.keymap.set("n", "gb", function()
+        -- "gf" => fetch origin, then add distance from the default branch to the popup
+        vim.keymap.set("n", "gf", function()
           require("config.tree_git_popup").show_distance()
-        end, opts("Git: distance from default branch"))
+        end, opts("Git: fetch + distance from default branch"))
         -- "gB" => floating branch switcher for the repo under the cursor
         vim.keymap.set("n", "gB", function()
           local node = api.tree.get_node_under_cursor()

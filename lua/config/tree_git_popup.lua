@@ -6,7 +6,7 @@
 --
 -- The cheap info (status + last commit) runs automatically, debounced, async via
 -- vim.system. Distance from origin's default branch (e.g. origin/main) is an
--- extra git call left off the hot path — press the `gb` mapping over a folder to
+-- extra git call left off the hot path — press the `gf` mapping over a folder to
 -- add it. The float is non-focusable and closes when the cursor leaves a repo
 -- folder or the tree window.
 local M = {}
@@ -21,8 +21,8 @@ local ICON = NERD
     or { branch = "", ahead = "+", behind = "-", staged = "S", mod = "M", untrk = "?", clean = "ok", base = "vs ", term = "$ " }
 
 -- Dimmed footer reminding of the folder actions. `\` is the leader, so `\T` is
--- the focus-terminal mapping; `gb` fetches origin then shows branch distance.
-local HINTS = "T term   \\T term+focus   gb fetch+dist"
+-- the focus-terminal mapping; `gf` fetches origin then shows branch distance.
+local HINTS = "T term   \\T term+focus   gf fetch+dist"
 
 local win, buf
 local NS = vim.api.nvim_create_namespace("tree_git_popup")
