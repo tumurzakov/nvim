@@ -273,6 +273,7 @@ local function setup_diff_keymaps(buf)
   vim.keymap.set("n", "e", function() M.edit_under_cursor() end, o)
   vim.keymap.set("n", "r", function() M.run_checkers_current() end, o)
   vim.keymap.set("n", "P", function() M.push() end, o)
+  vim.keymap.set("n", "B", function() M.rebase() end, o)
   vim.keymap.set("n", "X", function() M.revert_under_cursor() end, o)
   vim.keymap.set("n", "?", function() M.show_help() end, o)
   vim.keymap.set("n", "q", function() M.close() end, o)
@@ -759,6 +760,47 @@ function M.push()
   end
 end
 
+-- Rebase the current branch onto the latest base (B): fetch <remote>/develop,
+-- then `git rebase <remote>/develop`. On conflicts, offers to abort. Refuses on
+-- a detached HEAD (ReviewMR worktree). Refreshes the review afterward.
+function M.rebase()
+  if not S then return end
+  local root = S.root
+  local ok, br = git(root, { "symbolic-ref", "--quiet", "--short", "HEAD" })
+  local branch = ok and br[1] or nil
+  if not branch or branch == "" then
+    vim.notify("review_view: HEAD is detached (MR review?) — cannot rebase", vim.log.levels.WARN)
+    return
+  end
+  local remote = remote_name()
+  local base = S.base:gsub("^" .. remote .. "/", "")
+  local onto = remote .. "/" .. base
+  if vim.fn.confirm(("Rebase '%s' onto latest %s?"):format(branch, onto), "&Yes\n&No", 2) ~= 1 then return end
+
+  vim.notify(("review_view: fetching %s, rebasing %s onto %s..."):format(base, branch, onto), vim.log.levels.INFO)
+  git(root, { "fetch", remote, base })
+  vim.system({ "git", "-C", root, "rebase", onto }, { text = true }, function(res)
+    vim.schedule(function()
+      if res.code == 0 then
+        vim.notify(("review_view: rebased %s onto %s"):format(branch, onto), vim.log.levels.INFO)
+        M.refresh()
+        return
+      end
+      local err = vim.trim((res.stderr or "") .. (res.stdout or ""))
+      local conflict = err:match("CONFLICT") or err:match("could not apply") or err:match("Resolve all conflicts")
+      if conflict then
+        -- Roll back so the working tree is exactly as before; resolve manually.
+        git(root, { "rebase", "--abort" })
+        vim.notify(("review_view: rebase onto %s has CONFLICTS — rolled back, nothing changed.\n"
+          .. "Rebase manually to resolve:  git rebase %s"):format(onto, onto), vim.log.levels.WARN)
+      else
+        vim.notify("review_view: rebase failed:\n" .. err, vim.log.levels.ERROR)
+      end
+      M.refresh()
+    end)
+  end)
+end
+
 -- Returns true if a review view was open and got closed, false otherwise.
 function M.close()
   if not S then return false end
@@ -876,12 +918,14 @@ local function build_ui(st)
     "    ⏎      show diff / fold folder       r        run checkers",
     "    Tab/za  fold folder                  zM/zR    fold / unfold all",
     "    X       revert WHOLE file → base     C        CodeCompanion chat",
-    "    P       push branch to remote        R        refresh",
-    "    q       close review                 ]q/[q    prev / next finding",
+    "    P       push (Force option)          B        rebase onto latest base",
+    "    R       refresh                      ]q/[q    prev / next finding",
+    "    q       close review",
     "",
     "  DIFF PANE",
     "    e       edit file in a tab           C        CodeCompanion (n/v)",
-    "    r       run checkers on this file    P        push branch to remote",
+    "    r       run checkers on this file    P        push (Force option)",
+    "    B       rebase onto latest base      R        refresh",
     "    X       revert change under cursor → base (develop)",
     "    ]q/[q   prev / next finding          R        refresh",
     "    q       close review",
@@ -921,6 +965,7 @@ local function build_ui(st)
   vim.keymap.set("n", "zR", function() fold_all(st, false) end, o)
   vim.keymap.set("n", "R", function() M.refresh() end, o)
   vim.keymap.set("n", "P", function() M.push() end, o)
+  vim.keymap.set("n", "B", function() M.rebase() end, o)
   vim.keymap.set("n", "X", function() M.revert_file_under_cursor() end, o)
   vim.keymap.set("n", "C", function() M.codecompanion({ entry = entry_under_cursor() }) end, o)
   vim.keymap.set("n", "?", function() M.show_help() end, o)
