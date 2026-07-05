@@ -21,6 +21,11 @@ local function remote_name()
   return (ok and type(sl) == "table" and sl.git_remote) or "origin"
 end
 
+local function base_branch()
+  local ok, sl = pcall(require, "config.settings_local")
+  return (ok and type(sl) == "table" and sl.git_base_branch) or "main"
+end
+
 -- Branches sorted by most recent commit (stale ones sink to the end); a local
 -- branch shadows its remote counterpart; the current branch is pinned on top.
 local function branches(root)
@@ -134,6 +139,48 @@ function M.switch(dir)
   for i = 1, math.min(#list, 9) do
     map(tostring(i), function() choose(i) end)
   end
+end
+
+-- Rebase the repo under `dir` onto the latest base (fetch <remote>/develop, then
+-- git rebase). Clean → done; conflicts → roll back (abort) so nothing changes and
+-- you resolve manually. Refuses on a detached HEAD.
+function M.rebase(dir)
+  local root = repo_root(dir)
+  if not root then
+    vim.notify("git: not a repository under " .. dir, vim.log.levels.WARN)
+    return
+  end
+  local okc, c = git(root, { "symbolic-ref", "--quiet", "--short", "HEAD" })
+  local branch = okc and c[1] or nil
+  if not branch or branch == "" then
+    vim.notify("git: HEAD is detached — cannot rebase", vim.log.levels.WARN)
+    return
+  end
+  local remote = remote_name()
+  local base = base_branch()
+  local onto = remote .. "/" .. base
+  if vim.fn.confirm(("Rebase '%s' onto latest %s?"):format(branch, onto), "&Yes\n&No", 2) ~= 1 then return end
+
+  vim.notify(("git: fetching %s, rebasing %s onto %s..."):format(base, branch, onto), vim.log.levels.INFO)
+  git(root, { "fetch", remote, base })
+  vim.system({ "git", "-C", root, "rebase", onto }, { text = true }, function(res)
+    vim.schedule(function()
+      if res.code == 0 then
+        vim.notify(("git: rebased %s onto %s"):format(branch, onto), vim.log.levels.INFO)
+      else
+        local err = vim.trim((res.stderr or "") .. (res.stdout or ""))
+        local conflict = err:match("CONFLICT") or err:match("could not apply") or err:match("Resolve all conflicts")
+        if conflict then
+          git(root, { "rebase", "--abort" })
+          vim.notify(("git: rebase onto %s has CONFLICTS — rolled back, nothing changed.\n"
+            .. "Rebase manually to resolve:  git rebase %s"):format(onto, onto), vim.log.levels.WARN)
+        else
+          vim.notify("git: rebase failed:\n" .. err, vim.log.levels.ERROR)
+        end
+      end
+      pcall(function() require("nvim-tree.api").tree.reload() end)
+    end)
+  end)
 end
 
 return M
