@@ -126,7 +126,23 @@ function M.switch(dir)
       vim.notify("git checkout " .. b.name .. " failed:\n" .. table.concat(out, "\n"), vim.log.levels.ERROR)
       return
     end
-    vim.notify(("git: %s → %s"):format(vim.fn.fnamemodify(root, ":t"), b.name), vim.log.levels.INFO)
+    local name = vim.fn.fnamemodify(root, ":t")
+    -- If the branch is remote-tracked, pull it up to the remote's latest
+    -- (fast-forward only, so local commits are never discarded).
+    local remote = remote_name()
+    local tracked = git(root, { "rev-parse", "--verify", "--quiet", remote .. "/" .. b.name })
+    if tracked then
+      git(root, { "fetch", remote, b.name })
+      local ff = git(root, { "merge", "--ff-only", remote .. "/" .. b.name })
+      if ff then
+        vim.notify(("git: %s → %s (up to date with %s)"):format(name, b.name, remote), vim.log.levels.INFO)
+      else
+        vim.notify(("git: %s → %s (diverged from %s — not pulled)"):format(name, b.name, remote),
+          vim.log.levels.WARN)
+      end
+    else
+      vim.notify(("git: %s → %s"):format(name, b.name), vim.log.levels.INFO)
+    end
     pcall(function() require("nvim-tree.api").tree.reload() end)
   end
 
