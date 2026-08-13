@@ -655,7 +655,11 @@ local function paint_dels(st, path)
   for _, d in ipairs(data) do
     local virt = {}
     for _, rl in ipairs(d.lines) do virt[#virt + 1] = { { pad .. rl, d.dhl } } end
-    vim.api.nvim_buf_set_extmark(buf, DEL_NS, d.row, 0, { virt_lines = virt, virt_lines_above = d.above })
+    -- leftcol: draw from the window's leftmost column so the textoff pad is the
+    -- ONLY gutter compensation. Without it virt_lines already start after the
+    -- number/sign columns and the pad shifts the text right by a second gutter.
+    vim.api.nvim_buf_set_extmark(buf, DEL_NS, d.row, 0,
+      { virt_lines = virt, virt_lines_above = d.above, virt_lines_leftcol = true })
   end
 end
 
