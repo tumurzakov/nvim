@@ -22,7 +22,7 @@ local ICON = NERD
 
 -- Dimmed footer reminding of the folder actions. `\` is the leader, so `\T` is
 -- the focus-terminal mapping; `gf` fetches origin then shows branch distance.
-local HINTS = "T term   \\T term+focus   gf fetch+dist"
+local HINTS = "T term   \\T term+focus   gf fetch+dist   gp pull"
 
 local win, buf
 local NS = vim.api.nvim_create_namespace("tree_git_popup")
@@ -31,6 +31,16 @@ local seq = 0   -- bumped on every cursor move; guards stale async results
 
 -- Everything the popup currently reflects. Rebuilt as async pieces arrive.
 local state = { dir = nil, treewin = nil, summary = nil, subject = nil, distance = nil }
+
+local function remote_name()
+  local ok, sl = pcall(require, "config.settings_local")
+  return (ok and type(sl) == "table" and sl.git_remote) or "origin"
+end
+
+local function base_branch()
+  local ok, sl = pcall(require, "config.settings_local")
+  return (ok and type(sl) == "table" and sl.git_base_branch) or "main"
+end
 
 function M.close()
   if win and vim.api.nvim_win_is_valid(win) then
@@ -150,6 +160,29 @@ local function build_lines()
     lines[#lines + 1] = ICON.term .. "terminal open"
     state._hls[#state._hls + 1] = { #lines - 1, "DiagnosticOk" }
   end
+  -- local base branch freshness (gf fast-forwards it in place unless you're on it)
+  local db = state.distance
+  if db and not db.fetching and db.base_fresh then
+    if db.base_fresh == "diverged" then
+      lines[#lines + 1] = ICON.base .. base_branch() .. " diverged — ff failed"
+      state._hls[#state._hls + 1] = { #lines - 1, "WarningMsg" }
+    else
+      lines[#lines + 1] = ICON.base .. base_branch()
+        .. (db.base_fresh == "updated" and " freshened" or " fresh")
+      state._hls[#state._hls + 1] = { #lines - 1, "Comment" }
+    end
+  end
+  -- actionable line: current branch behind its own upstream → pull / rebase
+  local du = state.distance
+  if du and not du.fetching and du.up_behind and du.up_behind > 0 then
+    if du.up_ahead == 0 then
+      lines[#lines + 1] = ICON.behind .. du.up_behind .. " behind upstream — gp to pull"
+    else
+      lines[#lines + 1] = ICON.behind .. du.up_behind .. " " .. ICON.ahead .. du.up_ahead
+        .. " diverged — gb to rebase"
+    end
+    state._hls[#state._hls + 1] = { #lines - 1, "WarningMsg" }
+  end
   -- hotkey hints (dimmed)
   lines[#lines + 1] = HINTS
   state._hls[#state._hls + 1] = { #lines - 1, "Comment" }
@@ -185,6 +218,30 @@ local function update(dir)
     end)
 end
 
+-- Fast-forward the local base branch (develop) in place, unless HEAD is sitting on
+-- it. Purely local ref advance via `fetch <remote> <base>:<base>` (ff-only, so a
+-- diverged base is rejected, never forced). Calls cb with a short status string:
+-- "fresh" | "updated" | "diverged" | nil (on base / not applicable).
+local function freshen_base_quiet(dir, cb)
+  local remote, base = remote_name(), base_branch()
+  vim.system({ "git", "-C", dir, "symbolic-ref", "--quiet", "--short", "HEAD" },
+    { text = true }, function(rc)
+      local cur = (rc.code == 0 and rc.stdout or ""):gsub("%s+$", "")
+      if cur == base then cb(nil); return end -- on base → gp/normal fetch handles it
+      vim.system({ "git", "-C", dir, "fetch", remote, base .. ":" .. base },
+        { text = true }, function(rb)
+          local out = (rb.stderr or "") .. (rb.stdout or "")
+          local status
+          if rb.code == 0 then
+            status = out:match("%->") and "updated" or "fresh"
+          elseif out:match("non%-fast%-forward") or out:match("%[rejected%]") then
+            status = "diverged"
+          end
+          cb(status)
+        end)
+    end)
+end
+
 -- Public: fetch origin, then add "distance from origin's default branch" to the
 -- popup for the folder under the cursor. Bound to a key because it touches the
 -- network and is the extra git work.
@@ -197,28 +254,36 @@ function M.show_distance()
   local mine = seq
 
   -- Compute distance from origin's default branch (after a fetch attempt).
-  local function compute(fetch_failed)
+  local function compute(fetch_failed, base_fresh)
     vim.system({ "git", "-C", dir, "rev-parse", "--abbrev-ref", "origin/HEAD" },
       { text = true }, function(r)
         local def = (r.code == 0 and r.stdout or ""):gsub("%s+$", "")
         if def == "" then def = "origin/main" end
         vim.system({ "git", "-C", dir, "rev-list", "--left-right", "--count", def .. "...HEAD" },
           { text = true }, function(r2)
-            vim.schedule(function()
-              if seq ~= mine or state.dir ~= dir then return end
-              if r2.code ~= 0 or not r2.stdout then
-                vim.notify("[tree-git] no upstream default branch found", vim.log.levels.WARN)
-                state.distance = nil
-                render()
-                return
-              end
-              local behind, ahead = r2.stdout:match("(%d+)%s+(%d+)")
-              state.distance = {
-                def = def, ahead = tonumber(ahead) or 0, behind = tonumber(behind) or 0,
-                fetch_failed = fetch_failed,
-              }
-              render()
-            end)
+            -- Also measure the current branch against its OWN upstream, so we can
+            -- tell whether a plain `git pull --ff-only` would help (gp hint below).
+            vim.system({ "git", "-C", dir, "rev-list", "--left-right", "--count", "@{u}...HEAD" },
+              { text = true }, function(r3)
+                vim.schedule(function()
+                  if seq ~= mine or state.dir ~= dir then return end
+                  if r2.code ~= 0 or not r2.stdout then
+                    vim.notify("[tree-git] no upstream default branch found", vim.log.levels.WARN)
+                    state.distance = nil
+                    render()
+                    return
+                  end
+                  local behind, ahead = r2.stdout:match("(%d+)%s+(%d+)")
+                  local ub, ua = "0", "0"
+                  if r3.code == 0 and r3.stdout then ub, ua = r3.stdout:match("(%d+)%s+(%d+)") end
+                  state.distance = {
+                    def = def, ahead = tonumber(ahead) or 0, behind = tonumber(behind) or 0,
+                    up_behind = tonumber(ub) or 0, up_ahead = tonumber(ua) or 0,
+                    fetch_failed = fetch_failed, base_fresh = base_fresh,
+                  }
+                  render()
+                end)
+              end)
           end)
       end)
   end
@@ -229,9 +294,39 @@ function M.show_distance()
     render()
   end
   vim.system({ "git", "-C", dir, "fetch", "origin", "--quiet" }, { text = true }, function(rf)
+    -- After remote-tracking refs are updated, also fast-forward the local base
+    -- branch in place, so a single gf both reports distance and keeps develop fresh.
+    freshen_base_quiet(dir, function(base_fresh)
+      vim.schedule(function()
+        if seq ~= mine or state.dir ~= dir then return end
+        compute(rf.code ~= 0, base_fresh)
+      end)
+    end)
+  end)
+end
+
+-- Public: fast-forward pull the current branch of the repo under the cursor from
+-- its upstream. Refuses to merge/rebase (--ff-only), so it's safe: it either
+-- advances the branch or does nothing. On a diverged branch it fails cleanly and
+-- points at gb (rebase). Refreshes the popup afterwards.
+function M.pull_ff()
+  local ok, api = pcall(require, "nvim-tree.api")
+  if not ok then return end
+  local node = api.tree.get_node_under_cursor()
+  if not (node and node.type == "directory" and node.absolute_path) then return end
+  local dir = node.absolute_path
+  vim.notify("[tree-git] pulling (fast-forward)…", vim.log.levels.INFO)
+  vim.system({ "git", "-C", dir, "pull", "--ff-only", "--quiet" }, { text = true }, function(rp)
     vim.schedule(function()
-      if seq ~= mine or state.dir ~= dir then return end
-      compute(rf.code ~= 0)
+      if rp.code == 0 then
+        vim.notify("[tree-git] pulled (fast-forward)", vim.log.levels.INFO)
+      else
+        local err = ((rp.stderr or "") .. (rp.stdout or "")):gsub("%s+$", "")
+        vim.notify("[tree-git] pull failed: " .. err .. "\n(diverged? use gb to rebase)",
+          vim.log.levels.WARN)
+      end
+      -- refresh distance/status in the popup for the same folder
+      if state.dir == dir then M.show_distance() end
     end)
   end)
 end

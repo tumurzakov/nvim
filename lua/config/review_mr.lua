@@ -142,42 +142,66 @@ function M.review(arg)
   end
 
   local base = base_branch()
-  vim.notify(("ReviewMR: fetching merge request !%d ..."):format(iid), vim.log.levels.INFO)
 
-  -- 1) fetch the MR head (GitLab exposes it at refs/merge-requests/<iid>/head)
-  local ok_f, out_f = git(root, { "fetch", remote_name(), ("merge-requests/%d/head"):format(iid) })
-  if not ok_f then
-    vim.notify("ReviewMR: fetch failed:\n" .. table.concat(out_f, "\n"), vim.log.levels.ERROR)
+  -- Fetch the MR head, check it out in a throwaway detached worktree, and open
+  -- the review. `label` is the branch/ticket shown as the review's head.
+  local function proceed(label)
+    vim.notify(("ReviewMR: fetching merge request !%d ..."):format(iid), vim.log.levels.INFO)
+    -- fetch the MR head (GitLab exposes it at refs/merge-requests/<iid>/head)
+    local ok_f, out_f = git(root, { "fetch", remote_name(), ("merge-requests/%d/head"):format(iid) })
+    if not ok_f then
+      vim.notify("ReviewMR: fetch failed:\n" .. table.concat(out_f, "\n"), vim.log.levels.ERROR)
+      return
+    end
+    local ok_s, sha = git(root, { "rev-parse", "FETCH_HEAD" })
+    if not ok_s or not sha[1] then
+      vim.notify("ReviewMR: could not resolve fetched MR head", vim.log.levels.ERROR)
+      return
+    end
+    sha = sha[1]
+
+    -- throwaway detached worktree so the user's real folder / branch is untouched
+    local wtdir = vim.fn.tempname()
+    local ok_w, out_w = git(root, { "worktree", "add", "--detach", wtdir, sha })
+    if not ok_w then
+      vim.notify("ReviewMR: worktree add failed:\n" .. table.concat(out_w, "\n"), vim.log.levels.ERROR)
+      return
+    end
+    track_worktree(root, wtdir)
+
+    -- Each MR review opens in its own tab (gR supports several at once).
+    require("config.review_view").open(wtdir, {
+      head_label = label,
+      mr_iid = iid,   -- names the saved review file (gS): review-<repo>-mr<iid>.md
+      on_close = function() untrack_worktree(root, wtdir) end,
+    })
+    vim.notify(("ReviewMR: reviewing !%d (%s) vs %s — working folder untouched"):format(iid, label, base),
+      vim.log.levels.INFO)
+  end
+
+  -- The GitLab lookup (source branch → ticket key) is part of the Jira ticket
+  -- integration, gated by the same trigger. Off (e.g. Novartis, no Jira) → no
+  -- external call, just review the MR head as "mr-<iid>".
+  if not require("config.jira").enabled() then
+    proceed("mr-" .. iid)
     return
   end
-  local ok_s, sha = git(root, { "rev-parse", "FETCH_HEAD" })
-  if not ok_s or not sha[1] then
-    vim.notify("ReviewMR: could not resolve fetched MR head", vim.log.levels.ERROR)
-    return
-  end
-  sha = sha[1]
 
-  -- 2) check the MR out in a THROWAWAY detached worktree so the user's real
-  --    working folder / branch is never touched. Removed when the review closes.
-  local wtdir = vim.fn.tempname()
-  local ok_w, out_w = git(root, { "worktree", "add", "--detach", wtdir, sha })
-  if not ok_w then
-    vim.notify("ReviewMR: worktree add failed:\n" .. table.concat(out_w, "\n"), vim.log.levels.ERROR)
-    return
-  end
-  track_worktree(root, wtdir)
-
-  -- 3) review the worktree (vs base). It diffs against develop, which
-  --    review_view refreshes from origin on open.
-  local branch = "mr-" .. iid
-  local rv = require("config.review_view")
-  pcall(rv.close)
-  rv.open(wtdir, {
-    head_label = branch,
-    on_close = function() untrack_worktree(root, wtdir) end,
-  })
-  vim.notify(("ReviewMR: reviewing !%d (%s) vs %s — working folder untouched"):format(iid, branch, base),
-    vim.log.levels.INFO)
+  -- Best-effort: ask GitLab for the MR's source branch (which carries the
+  -- NBSART-<n> ticket key) so the review labels itself with the real branch and
+  -- auto-loads the Jira ticket. Falls back to "mr-<iid>" without a token.
+  require("config.gitlab").mr_for_repo(root, iid, function(mr, err)
+    local label
+    if mr and mr.source_branch and mr.source_branch ~= "" then
+      label = mr.source_branch                                  -- e.g. feature/NBSART-660-…
+    elseif mr and mr.title and mr.title:match("%u%u+%-%d+") then
+      label = mr.title:match("%u%u+%-%d+")                      -- "NBSART-660: …" → NBSART-660
+    else
+      label = "mr-" .. iid
+      if err then vim.notify("ReviewMR: GitLab lookup skipped (" .. err .. ")", vim.log.levels.INFO) end
+    end
+    proceed(label)
+  end)
 end
 
 vim.api.nvim_create_user_command("ReviewMR", function(o) M.review(o.args) end, {

@@ -18,7 +18,22 @@ return {
       sections = {
         lualine_a = { "mode" },
         lualine_b = { "branch", "diff", "diagnostics" },
-        lualine_c = { { "filename", path = 1 } }, -- relative path
+        lualine_c = {
+          { "filename", path = 1 }, -- relative path
+          -- For review_view diff panes: show which version is on screen
+          -- (live / @<sha>) right beside the file path. Empty elsewhere.
+          {
+            function()
+              local ok, rv = pcall(require, "config.review_view")
+              return ok and rv.view_tag_for and rv.view_tag_for() or ""
+            end,
+            cond = function()
+              local ok, rv = pcall(require, "config.review_view")
+              return ok and rv.view_tag_for and rv.view_tag_for() ~= ""
+            end,
+            icon = "",
+          },
+        },
         lualine_x = { "filetype" },
         lualine_y = { "progress" },
         lualine_z = { "location" },

@@ -2,10 +2,10 @@
 -- in a separate tab) via kitty's remote-control socket.
 --
 -- Requires kitty started with `allow_remote_control yes` + `listen_on unix:...`
--- (so KITTY_LISTEN_ON is set). The destination is the window whose window-title
--- OR tab-title contains the marker `[kd]` — set that title yourself on the tab you
--- want drops to land in. Change the marker or pin a full kitty --match expression
--- via settings_local `kitty_drop.marker` / `kitty_drop.match`.
+-- (so KITTY_LISTEN_ON is set). The first drop asks which kitty window to send to
+-- and remembers it; later drops reuse that window on a single Enter (press `n` at
+-- the prompt to pick a different one). Pin a fixed kitty --match expression via
+-- settings_local `kitty_drop.match` to skip the prompt entirely.
 local M = {}
 
 local function cfg()
@@ -13,38 +13,123 @@ local function cfg()
   return (ok and type(sl) == "table" and sl.kitty_drop) or {}
 end
 
-local function marker()
-  return cfg().marker or "[kd]"
-end
-
 local function socket()
   return os.getenv("KITTY_LISTEN_ON")
 end
 
--- Resolve the destination window id by scanning window/tab titles for the marker
--- (plain substring), excluding nvim's own window. Returns id, title or nil.
-local function resolve(sock, self_id)
-  local res = vim.system({ "kitty", "@", "--to", sock, "ls" }, { text = true }):wait()
-  if res.code ~= 0 then return nil end
-  local ok, data = pcall(vim.json.decode, res.stdout)
-  if not ok or type(data) ~= "table" then return nil end
+-- Persisted destination (survives restarts). We store title/cwd hints rather than
+-- the raw window id, since kitty window ids are reassigned across sessions.
+local function state_path()
+  return vim.fn.stdpath("state") .. "/kitty_drop_dest.json"
+end
 
-  local mk = marker()
+local function load_saved()
+  local f = io.open(state_path(), "r")
+  if not f then return nil end
+  local raw = f:read("*a"); f:close()
+  local ok, d = pcall(vim.json.decode, raw)
+  return (ok and type(d) == "table") and d or nil
+end
+
+local function save_dest(d)
+  local f = io.open(state_path(), "w")
+  if not f then return end
+  f:write(vim.json.encode(d)); f:close()
+end
+
+-- Forget the remembered destination; the next drop will ask again.
+function M.forget()
+  os.remove(state_path())
+  vim.notify("kitty_drop: forgot saved destination", vim.log.levels.INFO)
+end
+
+-- List candidate windows (everything except nvim's own), newest kitty `ls` order.
+local function list_windows(sock, self_id)
+  local res = vim.system({ "kitty", "@", "--to", sock, "ls" }, { text = true }):wait()
+  if res.code ~= 0 then return {} end
+  local ok, data = pcall(vim.json.decode, res.stdout)
+  if not ok or type(data) ~= "table" then return {} end
+  local out = {}
   for _, osw in ipairs(data) do
     for _, t in ipairs(osw.tabs or {}) do
-      local tab_has = (t.title or ""):find(mk, 1, true) ~= nil
       for _, w in ipairs(t.windows or {}) do
-        if tostring(w.id) ~= tostring(self_id)
-          and (tab_has or (w.title or ""):find(mk, 1, true) ~= nil) then
-          return w.id, (w.title ~= "" and w.title) or t.title
+        if tostring(w.id) ~= tostring(self_id) then
+          out[#out + 1] = {
+            id = w.id,
+            tab_title = t.title or "",
+            win_title = w.title or "",
+            cwd = w.cwd or "",
+            label = ("%s › %s"):format(t.title or "?",
+              (w.title ~= "" and w.title) or ("win " .. w.id)),
+          }
         end
       end
     end
   end
-  return nil
+  return out
 end
 
--- Send raw text to the resolved Claude window. opts.submit = true appends Enter.
+-- A candidate matches the saved destination if any stable hint lines up.
+local function matches(c, saved)
+  if not saved then return false end
+  return (saved.tab_title and saved.tab_title ~= "" and c.tab_title == saved.tab_title)
+    or (saved.win_title and saved.win_title ~= "" and c.win_title == saved.win_title)
+    or (saved.cwd and saved.cwd ~= "" and c.cwd == saved.cwd)
+end
+
+local function remember(c)
+  save_dest({ tab_title = c.tab_title, win_title = c.win_title, cwd = c.cwd, label = c.label })
+end
+
+-- Resolve the destination asynchronously and call cb(matcher, label) — or cb(nil)
+-- if cancelled. A pinned settings_local match skips the prompt; otherwise we reuse
+-- the saved window (single Enter) or pick a new one the first time / on demand.
+local function resolve_dest(sock, cb)
+  local override = cfg().match
+  if override and override ~= "" then cb(override, override); return end
+
+  local cands = list_windows(sock, os.getenv("KITTY_WINDOW_ID"))
+  if #cands == 0 then
+    vim.notify("kitty_drop: no other kitty windows to send to", vim.log.levels.WARN)
+    cb(nil); return
+  end
+
+  local function full_pick()
+    vim.ui.select(cands, {
+      prompt = "kitty_drop: send to which window?",
+      format_item = function(c) return c.label end,
+    }, function(c)
+      if not c then cb(nil); return end
+      remember(c)
+      cb("id:" .. c.id, c.label)
+    end)
+  end
+
+  local saved = load_saved()
+  local savedCand
+  for _, c in ipairs(cands) do
+    if matches(c, saved) then savedCand = c; break end
+  end
+
+  if savedCand then
+    vim.ui.input({
+      prompt = ("kitty_drop → '%s'?  [Enter=send, n=pick other] "):format(savedCand.label),
+    }, function(ans)
+      if ans == nil then cb(nil); return end -- Esc: cancel
+      ans = ans:lower()
+      if ans == "" or ans == "y" then
+        remember(savedCand) -- refresh label/hints in case they drifted
+        cb("id:" .. savedCand.id, savedCand.label)
+      else
+        full_pick()
+      end
+    end)
+  else
+    full_pick()
+  end
+end
+
+-- Send raw text to the chosen kitty window. opts.submit = true appends Enter.
 function M.send(text, opts)
   opts = opts or {}
   local sock = socket()
@@ -55,30 +140,19 @@ function M.send(text, opts)
   end
   if not text or text == "" then return end
 
-  local override = cfg().match
-  local matcher, dest
-  if override and override ~= "" then
-    matcher = override
-  else
-    local id, title = resolve(sock, os.getenv("KITTY_WINDOW_ID"))
-    if not id then
-      vim.notify("kitty_drop: no window titled with '" .. marker() ..
-        "' — set that marker in the target tab/window title", vim.log.levels.WARN)
-      return
-    end
-    matcher, dest = "id:" .. id, title
-  end
-
-  if opts.submit then text = text .. "\r" end
-  local cmd = { "kitty", "@", "--to", sock, "send-text",
-    "--match", matcher, "--stdin", "--bracketed-paste=auto" }
-  vim.system(cmd, { stdin = text }, vim.schedule_wrap(function(res)
-    if res.code ~= 0 then
-      vim.notify("kitty_drop: send failed: " .. (res.stderr or ""), vim.log.levels.ERROR)
-    else
-      vim.notify("kitty_drop: sent → " .. (dest or matcher), vim.log.levels.INFO)
-    end
-  end))
+  resolve_dest(sock, function(matcher, dest)
+    if not matcher then return end
+    local payload = opts.submit and (text .. "\r") or text
+    local cmd = { "kitty", "@", "--to", sock, "send-text",
+      "--match", matcher, "--stdin", "--bracketed-paste=auto" }
+    vim.system(cmd, { stdin = payload }, vim.schedule_wrap(function(res)
+      if res.code ~= 0 then
+        vim.notify("kitty_drop: send failed: " .. (res.stderr or ""), vim.log.levels.ERROR)
+      else
+        vim.notify("kitty_drop: sent → " .. (dest or matcher), vim.log.levels.INFO)
+      end
+    end))
+  end)
 end
 
 -- The review_view module (gR), if loaded — used to translate diff-buffer

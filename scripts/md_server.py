@@ -39,7 +39,7 @@ body {
   table th, table td { border-color: #30363d !important; }
   hr { background: #30363d !important; }
 }
-article { max-width: 820px; margin: 0 auto; padding: 40px 24px 96px; }
+article { max-width: 1400px; margin: 0 auto; padding: 40px 48px 96px; }
 a { color: #0969da; text-decoration: none; }
 a:hover { text-decoration: underline; }
 h1, h2, h3, h4 { margin-top: 1.6em; margin-bottom: .6em; line-height: 1.25; font-weight: 600; }
@@ -89,7 +89,29 @@ async function poll() {{
 }}
 poll();
 </script>
-</head><body><article>{body}</article></body></html>"""
+</head><body><article>{body}</article>{mermaid}</body></html>"""
+
+
+# Rendered ```mermaid fences (pandoc emits <pre class="mermaid"><code>…</code></pre>,
+# python-markdown emits <pre><code class="language-mermaid">…</code></pre>) are turned
+# into live diagrams. Loaded from a CDN — needs network; degrades to the code block
+# offline. Kept out of PAGE.format() so its many { } braces need no escaping.
+MERMAID_JS = """<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default' });
+document.querySelectorAll('pre').forEach((pre) => {
+  const code = pre.querySelector('code');
+  const cls = pre.className + ' ' + (code ? code.className : '');
+  if (/(^|\\s)(language-)?mermaid(\\s|$)/.test(cls)) {
+    const el = document.createElement('pre');
+    el.className = 'mermaid';
+    el.textContent = (code || pre).textContent;
+    pre.replaceWith(el);
+  }
+});
+try { await mermaid.run(); } catch (e) { console.error('mermaid:', e); }
+</script>"""
 
 
 def render_markdown(path):
@@ -208,7 +230,7 @@ def make_handler(root):
             if os.path.isdir(abspath):
                 page = PAGE.format(
                     title=html.escape("/" + rel.strip("/") or "root"),
-                    css=CSS, live="false", mtime_url="''",
+                    css=CSS, live="false", mtime_url="''", mermaid=MERMAID_JS,
                     body=dir_listing(abspath, rel),
                 )
                 self._send(200, page)
@@ -218,7 +240,7 @@ def make_handler(root):
                 mtime_url = "'/__mtime/" + urllib.parse.quote(rel) + "'"
                 page = PAGE.format(
                     title=html.escape(os.path.basename(abspath)),
-                    css=CSS, live="true", mtime_url=mtime_url,
+                    css=CSS, live="true", mtime_url=mtime_url, mermaid=MERMAID_JS,
                     body=render_markdown(abspath),
                 )
                 self._send(200, page)

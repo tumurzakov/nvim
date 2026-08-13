@@ -72,6 +72,34 @@ M.codecompanion = {
 -- switcher. Defaults to "origin".
 -- M.git_remote = "origin"
 
+-- Where `gS` (save a graded MR/branch review) writes its markdown, under a
+-- per-ticket subfolder: <tasks_dir>/<TICKET>/review-<repo>-mr<iid>.md (or
+-- review-<repo>-<ticket>.md for a non-MR review). Defaults to ~/sources/nbs-art/tasks.
+-- Also where the Jira ticket mirror (<TICKET>/ticket.md) is written.
+-- M.tasks_dir = "~/sources/nbs-art/tasks"
+
+-- Jira ticket integration for the review view. OFF by default — the whole
+-- feature (gR sidebar ticket node + tasks/<TICKET>/ticket.md mirror, the gJ
+-- hotkey, gS review enrichment, and the :ReviewMR GitLab branch lookup) is gated
+-- by `enabled` and makes NO external calls unless you turn it on. Leave it off in
+-- environments without Jira (e.g. Novartis).
+--   enabled  master trigger — must be true for any of the above to run
+--   token    Jira PAT (Bearer); falls back to $JIRA_API_TOKEN, then the
+--            epam-jira MCP server's env in ~/.claude.json
+--   base_url falls back to $JIRA_BASE_URL, then https://jiraeu.epam.com
+-- M.jira = {
+--   enabled  = true,
+--   base_url = "https://jiraeu.epam.com",
+--   token    = "…",
+-- }
+
+-- GitLab token for the :ReviewMR source-branch lookup (only used when
+-- jira.enabled). Falls back to $GITLAB_TOKEN, then GITLAB_TOKEN in a .env at the
+-- repo root / its parents (where the nbs-art clones keep it).
+-- M.gitlab = {
+--   token = "…",   -- GitLab personal access token (sent as PRIVATE-TOKEN)
+-- }
+
 -- Voice dictation (F10) engine: "vosk" (default, offline model) or "macos"
 -- (on-device Speech framework via the `hear` CLI — `brew install hear`).
 -- M.dictation_engine = "macos"
@@ -112,12 +140,11 @@ M.codecompanion = {
 -- Kitty drop (<leader>kd / <leader>kf): send text from nvim into another kitty
 -- window — the Claude Code TUI in a separate tab. Requires kitty started with
 -- `allow_remote_control yes` + `listen_on unix:...` (so KITTY_LISTEN_ON is set).
--- The destination is the window whose window- or tab-title contains the marker
--- `[kd]` — put that marker in the title of the tab you want drops to land in
--- (e.g. kitty's "set tab title" / set-tab-title). Customise below if needed.
+-- The first drop asks which kitty window to send to and remembers it; later drops
+-- reuse it on a single Enter (press `n` at the prompt to pick another). To skip the
+-- prompt, pin a fixed kitty --match expression below.
 -- M.kitty_drop = {
---   marker = "[kd]",          -- substring looked for in window/tab titles
---   -- match  = "cmdline:claude",  -- OR pin a full kitty --match expr (overrides marker)
+--   match = "cmdline:claude",  -- pin a kitty --match expr; skips the picker entirely
 -- }
 
 -- Agenda builder: web pages to scrape for context. Each entry is { name, url }.

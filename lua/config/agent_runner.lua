@@ -7,6 +7,7 @@ local M = {}
 -- M.run_cmd(cmd, opts)
 --   cmd                argv table (e.g. { "claude", "-p" })
 --   opts.env           table merged over the parent environment
+--   opts.cwd           working directory for the process (nil = inherit nvim's)
 --   opts.stdin         string piped to the process (channel closed after); nil = none
 --   opts.on_line(line) called once per complete stdout line
 --   opts.on_exit(code, stderr)  called when the job exits (stderr is a string)
@@ -43,6 +44,7 @@ function M.run_cmd(cmd, opts)
   local stderr_buf = {}
   local job = vim.fn.jobstart(cmd, {
     env = env,
+    cwd = (opts.cwd and opts.cwd ~= "" and vim.fn.isdirectory(opts.cwd) == 1) and opts.cwd or nil,
     stdout_buffered = false,
     on_stdout = function(_, data) process_lines(data) end,
     on_stderr = function(_, data)

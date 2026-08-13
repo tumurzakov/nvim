@@ -47,6 +47,18 @@ return {
         vim.keymap.set("n", "gf", function()
           require("config.tree_git_popup").show_distance()
         end, opts("Git: fetch + distance from default branch"))
+        -- "gp" => fast-forward pull the current branch from its upstream
+        vim.keymap.set("n", "gp", function()
+          require("config.tree_git_popup").pull_ff()
+        end, opts("Git: pull current branch (ff-only)"))
+        -- "gF" => freshen the local base branch (develop) in place, no switch
+        vim.keymap.set("n", "gF", function()
+          local node = api.tree.get_node_under_cursor()
+          if not node or not node.absolute_path then return end
+          local dir = node.type == "directory" and node.absolute_path
+            or vim.fn.fnamemodify(node.absolute_path, ":h")
+          require("config.tree_git_switch").freshen_base(dir)
+        end, opts("Git: freshen base branch in place (ff-only)"))
         -- "gb" => rebase the repo under the cursor onto the latest base branch
         vim.keymap.set("n", "gb", function()
           local node = api.tree.get_node_under_cursor()

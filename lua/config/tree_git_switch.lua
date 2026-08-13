@@ -157,6 +157,39 @@ function M.switch(dir)
   end
 end
 
+-- Freshen the local base branch (develop) from its remote WITHOUT switching to it.
+-- `git fetch <remote> <base>:<base>` fast-forwards the local ref in place; it's
+-- ff-only by default (a diverged base is rejected, nothing is forced). Handy from a
+-- feature branch. If you're currently on the base branch git refuses this (can't
+-- fetch into the checked-out branch) — use gp there instead.
+function M.freshen_base(dir)
+  local root = repo_root(dir)
+  if not root then
+    vim.notify("git: not a repository under " .. dir, vim.log.levels.WARN)
+    return
+  end
+  local remote = remote_name()
+  local base = base_branch()
+  vim.notify(("git: freshening %s from %s/%s..."):format(base, remote, base), vim.log.levels.INFO)
+  vim.system({ "git", "-C", root, "fetch", remote, base .. ":" .. base }, { text = true },
+    function(res)
+      vim.schedule(function()
+        local err = vim.trim((res.stderr or "") .. (res.stdout or ""))
+        if res.code == 0 then
+          vim.notify(("git: %s is fresh (fast-forwarded from %s)"):format(base, remote), vim.log.levels.INFO)
+        elseif err:match("Refusing to fetch into branch") or err:match("checked out") then
+          vim.notify(("git: you're on %s — use gp to pull it instead"):format(base), vim.log.levels.WARN)
+        elseif err:match("non%-fast%-forward") or err:match("rejected") then
+          vim.notify(("git: local %s has diverged from %s/%s — not updated (rebase/reset manually)")
+            :format(base, remote, base), vim.log.levels.WARN)
+        else
+          vim.notify("git: freshen failed:\n" .. err, vim.log.levels.ERROR)
+        end
+        pcall(function() require("nvim-tree.api").tree.reload() end)
+      end)
+    end)
+end
+
 -- Rebase the repo under `dir` onto the latest base (fetch <remote>/develop, then
 -- git rebase). Clean → done; conflicts → roll back (abort) so nothing changes and
 -- you resolve manually. Refuses on a detached HEAD.

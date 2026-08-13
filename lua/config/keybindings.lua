@@ -48,6 +48,17 @@ local function open_codecompanion_chat_with_selection()
     leave_visual_mode()
   end
 
+  -- Inside a gR review diff pane the buffer is a nameless scratch buffer holding
+  -- code from ANOTHER repo. A bare selection makes CodeCompanion grep the wrong
+  -- (cwd) repo and conclude the code doesn't exist. Delegate to the review view's
+  -- context-aware chat, which seeds repo / file / base→worktree / diff / findings.
+  local bufnr = vim.api.nvim_get_current_buf()
+  local rv_ok, rv = pcall(require, "config.review_view")
+  if rv_ok and rv.file_for and rv.file_for(bufnr) then
+    rv.codecompanion({ visual = has_selection })
+    return
+  end
+
   local selection = has_selection and get_visual_selection_from_marks() or nil
 
   local cc = require("codecompanion")
@@ -984,33 +995,18 @@ map({ "n", "v" }, "<leader>tn", run_pytest_nearest, { desc = "Pytest nearest" })
 map("n", "<leader>rx", run_ruff_fix_current_file, { desc = "Ruff check --fix" })
 map("n", "<leader>x", run_current_python_script, { desc = "Run current Python file" })
 
--- Text-to-speech (single engine via tts.py: macOS Ava (Premium) → Piper fallback).
---   F8 (normal): read from cursor paragraph-by-paragraph (auto-advance) with
---                real-time word highlighting; press again to stop.
+-- Text-to-speech via macOS `say` (Ava Premium) — mirrors ~/.hammerspoon: the
+-- whole text is spoken by ONE `say` process (smooth, no per-chunk gaps), with
+-- [[slnc]] pauses so sentences/list items don't run together. Markdown is
+-- stripped so symbols aren't read aloud. No live word highlighting (`say` has no
+-- per-word callback) — stop with \sq or by pressing F8 again.
+--   F8 (normal): speak from the cursor line to end of buffer; press again to stop.
 --   F8 / \ss (visual): speak the selection.
---   \sq: stop. One job + one stop function shared by all of the above.
-local tts_ns = vim.api.nvim_create_namespace("tts_highlight")
+--   \sq: stop.
+local SAY_VOICE = "Ava (Premium)"
 local tts_job = nil
-local tts_buf = nil
-local tts_continuing = false -- true = auto-advance to next paragraph
-local tts_py = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h") .. "/tts.py"
-
--- Set ElevenLabs API key once at load time
-local ok_sl, sl = pcall(require, "config.settings_local")
-if ok_sl and sl.elevenlabs_api_key then
-  vim.env.ELEVENLABS_API_KEY = sl.elevenlabs_api_key
-end
-
-local function tts_clear()
-  if tts_buf and vim.api.nvim_buf_is_valid(tts_buf) then
-    vim.api.nvim_buf_clear_namespace(tts_buf, tts_ns, 0, -1)
-  end
-  tts_buf = nil
-end
 
 local function tts_stop()
-  tts_continuing = false
-  tts_clear()
   if tts_job then
     vim.fn.jobstop(tts_job)
     tts_job = nil
@@ -1019,146 +1015,80 @@ local function tts_stop()
   return false
 end
 
-local TTS_CHUNK_LIMIT = 300 -- max chars per TTS call
-
---- Find next chunk starting from `from_line` (0-based).
---- Collects paragraphs until reaching TTS_CHUNK_LIMIT chars or EOF.
---- Returns start_line, end_line (0-based, exclusive end) or nil if EOF.
-local function tts_next_chunk(buf, from_line)
-  local total = vim.api.nvim_buf_line_count(buf)
-  -- Skip leading blank lines
-  local start = from_line
-  while start < total do
-    local l = vim.api.nvim_buf_get_lines(buf, start, start + 1, false)[1]
-    if not l:match("^%s*$") then break end
-    start = start + 1
-  end
-  if start >= total then return nil end
-  -- Collect lines, breaking at paragraph boundary once limit exceeded
-  local finish = start
-  local chars = 0
-  local in_blank = false
-  while finish < total do
-    local l = vim.api.nvim_buf_get_lines(buf, finish, finish + 1, false)[1]
-    local is_blank = l:match("^%s*$") ~= nil
-    -- Break at paragraph boundary if we have enough text
-    if is_blank and chars >= TTS_CHUNK_LIMIT then break end
-    if not is_blank then
-      chars = chars + #l + 1
+-- Clean markdown to speakable text, then insert [[slnc N]] pauses (ms) so the
+-- reading is paced. Pauses are added LAST so the symbol-stripping passes above
+-- don't eat their [[ ]] brackets.
+local function tts_prepare(text)
+  text = text:gsub("\r\n", "\n")
+  -- Fenced code blocks -> placeholder; inline code -> its contents.
+  text = text:gsub("```.-```", " code block. ")
+  text = text:gsub("`([^`]+)`", "%1")
+  -- Images ![alt](url) -> alt ; links [text](url) -> text.
+  text = text:gsub("!%[([^%]]*)%]%([^%)]*%)", "%1")
+  text = text:gsub("%[([^%]]*)%]%([^%)]*%)", "%1")
+  -- HTML tags.
+  text = text:gsub("<[^>]->", "")
+  -- Line-level markers: headers, blockquotes, list bullets, table/hr rules.
+  local out = {}
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    local bare = line:gsub("%s", "")
+    if #bare >= 3 and bare:match("^[-=_*|:]+$") then
+      line = "" -- horizontal rule or table separator
+    else
+      line = line:gsub("^%s*#+%s+", "")     -- header
+      line = line:gsub("^%s*>+%s*", "")     -- blockquote
+      line = line:gsub("^%s*[-*+]%s+", "")  -- bullet
+      line = line:gsub("^%s*%d+[.)]%s+", "") -- numbered item
     end
-    in_blank = is_blank
-    finish = finish + 1
+    out[#out + 1] = line
   end
-  -- Trim trailing blank lines from the chunk
-  while finish > start do
-    local l = vim.api.nvim_buf_get_lines(buf, finish - 1, finish, false)[1]
-    if not l:match("^%s*$") then break end
-    finish = finish - 1
-  end
-  if finish <= start then return nil end
-  return start, finish
+  text = table.concat(out, "\n")
+  -- Emphasis markers and stray symbols that get mispronounced.
+  text = text:gsub("%*+", ""):gsub("__+", "")
+  text = text:gsub("[~^|\\`{}%[%]]", " ")
+  -- Pauses (values mirror ~/.hammerspoon): line breaks, sentence/clause, comma.
+  text = text:gsub("%s*\n+%s*", " [[slnc 550]] ")
+  text = text:gsub("([%.%?!:;])(%s)", "%1 [[slnc 350]]%2")
+  text = text:gsub("(,)(%s)", "%1 [[slnc 200]]%2")
+  -- Normalise runs of spaces/tabs (leaves [[slnc N]] intact).
+  text = text:gsub("[ \t]+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+  return text
 end
 
-local function tts_speak_paragraph(buf, start_line, end_line)
-  local lines = vim.api.nvim_buf_get_lines(buf, start_line, end_line, false)
-  local text = table.concat(lines, "\n")
-  if text:match("^%s*$") then
-    tts_continuing = false
+-- Speak `text` with a single `say` process (stops any current speech first).
+local function tts_say(text)
+  tts_stop()
+  text = tts_prepare(text)
+  if text == "" then return end
+  tts_job = vim.fn.jobstart({ "say", "-v", SAY_VOICE }, {
+    on_exit = function() tts_job = nil end,
+  })
+  if tts_job <= 0 then
+    tts_job = nil
+    vim.notify("TTS: failed to start `say`", vim.log.levels.ERROR)
     return
   end
-
-  -- Map character offset in text -> (line, col) in buffer
-  local offsets = {}
-  local pos = 0
-  for i, line in ipairs(lines) do
-    for j = 1, #line do
-      offsets[pos] = { start_line + i - 1, j - 1 }
-      pos = pos + 1
-    end
-    offsets[pos] = { start_line + i - 1, #line }
-    pos = pos + 1
-  end
-
-  tts_buf = buf
-
-  tts_job = vim.fn.jobstart({ "python3", tts_py }, {
-    stdout_buffered = false,
-    on_stderr = function(_, data)
-      local msg = table.concat(data, "\n")
-      if msg ~= "" then vim.schedule(function() vim.notify("TTS: " .. msg, vim.log.levels.WARN) end) end
-    end,
-    on_stdout = function(_, data)
-      for _, line in ipairs(data) do
-        if line == "DONE" or line == "" then
-          -- done
-        else
-          local offset, length = line:match("^(%d+)%s+(%d+)$")
-          if offset then
-            offset = tonumber(offset)
-            length = tonumber(length)
-            vim.schedule(function()
-              if not tts_buf or not vim.api.nvim_buf_is_valid(tts_buf) then return end
-              vim.api.nvim_buf_clear_namespace(tts_buf, tts_ns, 0, -1)
-              local start_pos = offsets[offset]
-              local end_pos = offsets[offset + length] or offsets[offset + length - 1]
-              if start_pos then
-                local end_col = end_pos and end_pos[2] or (start_pos[2] + length)
-                local end_row = end_pos and end_pos[1] or start_pos[1]
-                if end_row == start_pos[1] then
-                  pcall(vim.api.nvim_buf_add_highlight, tts_buf, tts_ns, "Visual", start_pos[1], start_pos[2], end_col)
-                else
-                  pcall(vim.api.nvim_buf_add_highlight, tts_buf, tts_ns, "Visual", start_pos[1], start_pos[2], -1)
-                end
-                pcall(vim.api.nvim_win_set_cursor, 0, { start_pos[1] + 1, start_pos[2] })
-              end
-            end)
-          end
-        end
-      end
-    end,
-    on_exit = function()
-      tts_job = nil
-      vim.schedule(function()
-        tts_clear()
-        -- Auto-advance to next paragraph if not stopped
-        if tts_continuing and buf and vim.api.nvim_buf_is_valid(buf) then
-          local next_start, next_end = tts_next_chunk(buf, end_line)
-          if next_start then
-            tts_speak_paragraph(buf, next_start, next_end)
-          else
-            tts_continuing = false
-          end
-        end
-      end)
-    end,
-  })
   vim.fn.chansend(tts_job, text)
   vim.fn.chanclose(tts_job, "stdin")
 end
 
--- Speak the visual selection as a single chunk (no auto-advance).
-local function tts_speak_selection()
-  tts_stop()
-  local buf = vim.api.nvim_get_current_buf()
-  local start_pos = vim.api.nvim_buf_get_mark(buf, "<")
-  local end_pos = vim.api.nvim_buf_get_mark(buf, ">")
-  if start_pos[1] == 0 then return end
-  tts_continuing = false
-  tts_speak_paragraph(buf, start_pos[1] - 1, end_pos[1])
-end
-
--- F8 (normal): toggle — read from cursor paragraph-by-paragraph, or stop.
+-- F8 (normal): speak from the cursor line to end of buffer; press again to stop.
 map("n", "<F8>", function()
   if tts_stop() then return end
   local buf = vim.api.nvim_get_current_buf()
-  local cursor = vim.api.nvim_win_get_cursor(0)
-  local start, finish = tts_next_chunk(buf, cursor[1] - 1)
-  if not start then return end
-  tts_continuing = true
-  tts_speak_paragraph(buf, start, finish)
+  local from = vim.api.nvim_win_get_cursor(0)[1] - 1
+  tts_say(table.concat(vim.api.nvim_buf_get_lines(buf, from, -1, false), "\n"))
 end, { desc = "TTS: read from cursor / stop" })
 
--- Visual selection → speak (F8 or \ss share the same engine + highlighting).
+-- Visual selection → speak (line-granular, like the old engine).
+local function tts_speak_selection()
+  local buf = vim.api.nvim_get_current_buf()
+  local s = vim.api.nvim_buf_get_mark(buf, "<")
+  local e = vim.api.nvim_buf_get_mark(buf, ">")
+  if s[1] == 0 then return end
+  tts_say(table.concat(vim.api.nvim_buf_get_lines(buf, s[1] - 1, e[1], false), "\n"))
+end
+
 local function tts_selection_mapping()
   leave_visual_mode()
   vim.schedule(tts_speak_selection)
