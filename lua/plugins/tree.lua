@@ -2,8 +2,7 @@ return {
   "nvim-tree/nvim-tree.lua",
   dependencies = { "nvim-tree/nvim-web-devicons" },
   config = function()
-    local ok, settings_local = pcall(require, "config.settings_local")
-    local nerd_icons = not (ok and type(settings_local) == "table" and settings_local.nerd_font_icons == false)
+    local nerd_icons = require("config.settings").get("nerd_font_icons") ~= false
 
     -- Subtle highlight for the inline branch label next to repo folders.
     vim.api.nvim_set_hl(0, "NvimTreeGitBranch", { link = "Comment", default = true })

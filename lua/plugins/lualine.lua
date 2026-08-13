@@ -4,8 +4,7 @@ return {
   event = "VeryLazy",
   config = function()
     -- Respect the nerd-font toggle from settings_local (default: icons on).
-    local ok, sl = pcall(require, "config.settings_local")
-    local icons = not (ok and type(sl) == "table" and sl.nerd_font_icons == false)
+    local icons = require("config.settings").get("nerd_font_icons") ~= false
 
     require("lualine").setup({
       options = {

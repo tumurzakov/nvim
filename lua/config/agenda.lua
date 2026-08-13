@@ -5,8 +5,7 @@ local PYTHON_CMD = "python3"
 local CONTEXT_SRC = os.getenv("HOME") .. "/sources/context/src"
 local CONTEXT_DIR = os.getenv("HOME") .. "/sources/context"
 
-local ok_sl, settings_local = pcall(require, "config.settings_local")
-local AGENDA_CFG = ok_sl and (settings_local.agenda or {}) or {}
+local AGENDA_CFG = require("config.settings").get("agenda", {})
 
 local function read_file(path)
   local f = io.open(path, "r")

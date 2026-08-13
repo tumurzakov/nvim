@@ -3,28 +3,8 @@
 -- tree so the inline branch label + git status refresh.
 local M = {}
 
-local function git(dir, args)
-  local cmd = { "git", "-C", dir }
-  vim.list_extend(cmd, args)
-  local out = vim.fn.systemlist(cmd)
-  return vim.v.shell_error == 0, out
-end
-
-local function repo_root(dir)
-  local ok, out = git(dir, { "rev-parse", "--show-toplevel" })
-  if ok and out[1] and out[1] ~= "" then return out[1] end
-  return nil
-end
-
-local function remote_name()
-  local ok, sl = pcall(require, "config.settings_local")
-  return (ok and type(sl) == "table" and sl.git_remote) or "origin"
-end
-
-local function base_branch()
-  local ok, sl = pcall(require, "config.settings_local")
-  return (ok and type(sl) == "table" and sl.git_base_branch) or "main"
-end
+local G = require("config.git")
+local git, repo_root, remote_name, base_branch = G.run, G.root, G.remote, G.base_branch
 
 -- Branches sorted by most recent commit (stale ones sink to the end); a local
 -- branch shadows its remote counterpart; the current branch is pinned on top.

@@ -7,8 +7,7 @@ local function repo_root(path)
 end
 
 local function settings_base_branch()
-  local ok, settings = pcall(require, "config.settings_local")
-  return (ok and settings.git_base_branch) or "main"
+  return require("config.settings").base_branch("main")
 end
 
 local function shell(args, cwd)

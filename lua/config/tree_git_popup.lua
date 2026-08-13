@@ -11,10 +11,10 @@
 -- folder or the tree window.
 local M = {}
 
-local NERD = (function()
-  local ok, sl = pcall(require, "config.settings_local")
-  return not (ok and type(sl) == "table" and sl.nerd_font_icons == false)
-end)()
+local settings = require("config.settings")
+local G = require("config.git")
+
+local NERD = settings.get("nerd_font_icons") ~= false
 
 local ICON = NERD
     and { branch = " ", ahead = "↑", behind = "↓", staged = "✚", mod = "●", untrk = "?", clean = "✓", base = "⇅ ", term = " " }
@@ -32,15 +32,7 @@ local seq = 0   -- bumped on every cursor move; guards stale async results
 -- Everything the popup currently reflects. Rebuilt as async pieces arrive.
 local state = { dir = nil, treewin = nil, summary = nil, subject = nil, distance = nil }
 
-local function remote_name()
-  local ok, sl = pcall(require, "config.settings_local")
-  return (ok and type(sl) == "table" and sl.git_remote) or "origin"
-end
-
-local function base_branch()
-  local ok, sl = pcall(require, "config.settings_local")
-  return (ok and type(sl) == "table" and sl.git_base_branch) or "main"
-end
+local remote_name, base_branch = G.remote, G.base_branch
 
 function M.close()
   if win and vim.api.nvim_win_is_valid(win) then

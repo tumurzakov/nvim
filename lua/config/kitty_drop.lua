@@ -9,8 +9,7 @@
 local M = {}
 
 local function cfg()
-  local ok, sl = pcall(require, "config.settings_local")
-  return (ok and type(sl) == "table" and sl.kitty_drop) or {}
+  return require("config.settings").get("kitty_drop", {})
 end
 
 local function socket()

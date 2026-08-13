@@ -19,6 +19,7 @@ vim.o.tabstop = 4
 vim.o.shiftwidth = 4
 vim.o.expandtab = true
 vim.o.termguicolors = true
+vim.o.updatetime = 300   -- quick CursorHold, e.g. for the diagnostics float
 
 -- Folding via LSP
 vim.o.foldmethod = "expr"

@@ -1,8 +1,7 @@
--- Load local settings safely (file is git-ignored)
-local ok, settings_local = pcall(require, "config.settings_local")
-
 -- Centralize local, git-ignored config for models/keys/endpoints
-local cc = ok and (settings_local.codecompanion or {}) or {}
+local cc = require("config.settings").get("codecompanion")
+local has_cc = cc ~= nil
+cc = cc or {}
 
 -- Interactions config (adapters per interaction type)
 local INTERACTIONS_CFG = vim.tbl_deep_extend("force", {
@@ -220,7 +219,7 @@ Rules:
         },
       },
     }),
-    extensions = ok and settings_local.codecompanion and {
+    extensions = has_cc and {
       mcphub = {
         callback = "mcphub.extensions.codecompanion",
         opts = {

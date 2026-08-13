@@ -1,5 +1,4 @@
-local ok, settings_local = pcall(require, "config.settings_local")
-local has_llm_config = ok and type(settings_local) == "table" and settings_local.codecompanion ~= nil
+local has_llm_config = require("config.settings").get("codecompanion") ~= nil
 
 return {
   "ravitemer/mcphub.nvim",

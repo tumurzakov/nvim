@@ -5,10 +5,10 @@ return {
     "williamboman/mason-lspconfig.nvim",
   },
   config = function()
-    local ok, settings_local = pcall(require, "config.settings_local")
+    local lsp_disabled = require("config.settings").get("lsp_disabled")
     local disabled = {}
-    if ok and type(settings_local) == "table" and type(settings_local.lsp_disabled) == "table" then
-      for _, name in ipairs(settings_local.lsp_disabled) do disabled[name] = true end
+    if type(lsp_disabled) == "table" then
+      for _, name in ipairs(lsp_disabled) do disabled[name] = true end
     end
     local function enabled(name) return not disabled[name] end
     local function filter(list)

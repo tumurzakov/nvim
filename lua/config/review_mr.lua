@@ -15,30 +15,16 @@ local function parse(arg)
   return host, path, iid and tonumber(iid)
 end
 
-local function base_branch()
-  local ok, sl = pcall(require, "config.settings_local")
-  return (ok and type(sl) == "table" and sl.git_base_branch) or "develop"
-end
+local G = require("config.git")
+local git, remote_name = G.run, G.remote
 
-local function remote_name()
-  local ok, sl = pcall(require, "config.settings_local")
-  return (ok and type(sl) == "table" and sl.git_remote) or "origin"
+-- MR reviews diff against develop by default (unlike gR's "main").
+local function base_branch()
+  return G.base_branch("develop")
 end
 
 local function repo_root()
-  local file = vim.api.nvim_buf_get_name(0)
-  local dir = (file ~= "" and vim.fn.filereadable(file) == 1)
-    and vim.fn.fnamemodify(file, ":h") or vim.fn.getcwd()
-  local out = vim.fn.systemlist({ "git", "-C", dir, "rev-parse", "--show-toplevel" })
-  if vim.v.shell_error ~= 0 or not out[1] or out[1] == "" then return nil end
-  return out[1]
-end
-
-local function git(root, args)
-  local cmd = { "git", "-C", root }
-  vim.list_extend(cmd, args)
-  local out = vim.fn.systemlist(cmd)
-  return vim.v.shell_error == 0, out
+  return G.root(G.buf_dir())
 end
 
 -- Throwaway review worktrees: removed when the review closes, and on nvim exit.
@@ -87,9 +73,9 @@ local function find_repo(path)
   if r then return r end
 
   local roots = { vim.fn.getcwd() }
-  local ok, sl = pcall(require, "config.settings_local")
-  if ok and type(sl) == "table" and type(sl.review_mr_roots) == "table" then
-    for _, x in ipairs(sl.review_mr_roots) do roots[#roots + 1] = vim.fn.expand(x) end
+  local extra = require("config.settings").get("review_mr_roots")
+  if type(extra) == "table" then
+    for _, x in ipairs(extra) do roots[#roots + 1] = vim.fn.expand(x) end
   end
 
   local name = path:match("([^/]+)$")   -- fast path: <root>/<repo-name>

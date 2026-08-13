@@ -211,8 +211,7 @@ end
 -- Engine selection: settings_local.dictation_engine = "vosk" (default) | "macos".
 -- "macos" uses the on-device Speech framework via the `hear` CLI (brew install hear).
 local function get_engine()
-  local ok, sl = pcall(require, "config.settings_local")
-  local e = ok and type(sl) == "table" and sl.dictation_engine
+  local e = require("config.settings").get("dictation_engine")
   return (e == "macos" or e == "hear") and "macos" or "vosk"
 end
 
@@ -317,9 +316,8 @@ local function macos_start()
   end
   current_lang = detect_system_lang()
   hear_raw, hear_committed = "", ""
-  local ok, sl = pcall(require, "config.settings_local")
-  local extra = (ok and type(sl) == "table" and type(sl.dictation_hear_args) == "table")
-    and sl.dictation_hear_args or { "-d", "-p" }   -- on-device + punctuation
+  local extra = require("config.settings").get("dictation_hear_args")
+  extra = type(extra) == "table" and extra or { "-d", "-p" }   -- on-device + punctuation
   local cmd = { bin, "-m" }   -- -m: single-line streaming (refines via \r)
   vim.list_extend(cmd, extra)
   vim.list_extend(cmd, { "-l", locale_for(current_lang) })

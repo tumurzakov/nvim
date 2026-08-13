@@ -5,8 +5,7 @@ local CONTEXT_SRC = os.getenv("HOME") .. "/sources/context/src"
 local CONTEXT_DIR = os.getenv("HOME") .. "/sources/context"
 local SKILLS_DIR = CONTEXT_DIR .. "/skills"
 
-local ok_sl, settings_local = pcall(require, "config.settings_local")
-local AGENDA_CFG = ok_sl and (settings_local.agenda or {}) or {}
+local AGENDA_CFG = require("config.settings").get("agenda", {})
 
 --- Read a file and return its content or nil
 local function read_file(path)

@@ -23,8 +23,8 @@ local function env_value(path, key)
 end
 
 local function resolve_token(root)
-  local ok, sl = pcall(require, "config.settings_local")
-  local j = ok and type(sl) == "table" and type(sl.gitlab) == "table" and sl.gitlab or {}
+  local j = require("config.settings").get("gitlab")
+  j = type(j) == "table" and j or {}
   if j.token and j.token ~= "" then return j.token end
   local env = os.getenv("GITLAB_TOKEN")
   if env and env ~= "" then return env end

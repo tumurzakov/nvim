@@ -48,8 +48,8 @@ end
 local function resolve()
   if _resolved then return end
   _resolved = true
-  local ok, sl = pcall(require, "config.settings_local")
-  local j = ok and type(sl) == "table" and type(sl.jira) == "table" and sl.jira or {}
+  local j = require("config.settings").get("jira")
+  j = type(j) == "table" and j or {}
   _token = j.token or os.getenv("JIRA_API_TOKEN") or from_claude_json("JIRA_API_TOKEN")
   _base = (j.base_url or os.getenv("JIRA_BASE_URL") or from_claude_json("JIRA_BASE_URL") or DEFAULT_BASE)
     :gsub("/$", "")
@@ -59,8 +59,8 @@ end
 -- the :ReviewMR GitLab lookup) stays OFF unless settings_local.jira.enabled == true.
 -- Default off so environments without Jira (e.g. Novartis) make no external calls.
 function M.enabled()
-  local ok, sl = pcall(require, "config.settings_local")
-  return ok and type(sl) == "table" and type(sl.jira) == "table" and sl.jira.enabled == true
+  local j = require("config.settings").get("jira")
+  return type(j) == "table" and j.enabled == true
 end
 
 function M.configured()

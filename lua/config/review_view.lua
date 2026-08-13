@@ -123,77 +123,11 @@ vim.api.nvim_create_autocmd("TabEnter", {
   end,
 })
 
-local function git(root, args)
-  local cmd = { "git", "-C", root }
-  vim.list_extend(cmd, args)
-  local out = vim.fn.systemlist(cmd)
-  return vim.v.shell_error == 0, out
-end
-
--- The remote to fetch/push against. Configurable via settings_local.git_remote.
-local function remote_name()
-  local ok, sl = pcall(require, "config.settings_local")
-  return (ok and type(sl) == "table" and sl.git_remote) or "origin"
-end
-
--- Ahead/behind of HEAD vs its upstream (the REMOTE feature branch, e.g.
--- origin/my-feature) — i.e. whether local commits need pushing (ahead) or the
--- remote has commits to pull (behind). No network: compares against the last-known
--- remote-tracking ref, so "to push" is always accurate; "to pull" may be stale
--- until a fetch (gf).
-local function upstream_status(root)
-  local uok, uout = git(root, { "rev-parse", "--abbrev-ref", "@{u}" })
-  local name = (uok and uout[1] and uout[1] ~= "") and uout[1] or nil
-  if not name then return { has_upstream = false } end
-  local ok, out = git(root, { "rev-list", "--left-right", "--count", "@{u}...HEAD" })
-  local behind, ahead = 0, 0
-  if ok and out[1] then behind, ahead = out[1]:match("(%d+)%s+(%d+)") end
-  return { has_upstream = true, name = name, behind = tonumber(behind) or 0, ahead = tonumber(ahead) or 0 }
-end
-
--- Mirror of tree.lua resolve_base: try git_base, then main/master/develop and
--- their origin/ variants, finally origin/HEAD.
-local function resolve_base(root)
-  local ok, settings_local = pcall(require, "config.settings_local")
-  local git_base = (ok and type(settings_local) == "table" and settings_local.git_base_branch) or "main"
-  local remote = remote_name()
-  local function verify(ref)
-    vim.fn.systemlist({ "git", "-C", root, "rev-parse", "--verify", "--quiet", ref })
-    return vim.v.shell_error == 0
-  end
-  local candidates = { git_base, remote .. "/" .. git_base }
-  for _, b in ipairs({ "main", "master", "develop" }) do
-    if b ~= git_base then
-      table.insert(candidates, b)
-      table.insert(candidates, remote .. "/" .. b)
-    end
-  end
-  for _, c in ipairs(candidates) do
-    if verify(c) then return c, git_base end
-  end
-  local okh, out = git(root, { "symbolic-ref", "--short", "refs/remotes/" .. remote .. "/HEAD" })
-  if okh and out[1] and out[1] ~= "" then return out[1], git_base end
-  return nil, git_base
-end
-
--- Human repo name: the origin project name (works even for a temp worktree whose
--- toplevel dir is a random tempname), falling back to the root's basename.
-local function repo_name(root)
-  local ok, url = git(root, { "remote", "get-url", remote_name() })
-  if ok and url[1] and url[1] ~= "" then
-    local n = url[1]:gsub("%.git$", ""):match("([^/:]+)$")
-    if n and n ~= "" then return n end
-  end
-  return vim.fn.fnamemodify(root, ":t")
-end
-
--- A set of path names from a `git` name-only command.
-local function name_set(root, args)
-  local ok, out = git(root, args)
-  local s = {}
-  if ok then for _, l in ipairs(out) do if l ~= "" then s[l] = true end end end
-  return s
-end
+-- Git plumbing shared with review_mr / tree_git_* lives in config.git.
+local settings = require("config.settings")
+local G = require("config.git")
+local git, remote_name, upstream_status, resolve_base, repo_name, name_set =
+  G.run, G.remote, G.upstream_status, G.resolve_base, G.repo_name, G.name_set
 
 -- Build the changed-file list over <merge_base>..WORKING-TREE — i.e. committed
 -- feature changes AND uncommitted edits — plus untracked files. Each entry is
@@ -464,52 +398,12 @@ local function render_sidebar(buf, st)
   st.dir_index = dir_index
 end
 
--- Locate a Universal Ctags binary. On macOS /usr/bin/ctags (BSD) shadows the
--- Homebrew one in PATH, so probe explicit locations and verify the flavour.
-local _ctags_bin
-local function ctags_bin()
-  if _ctags_bin ~= nil then return _ctags_bin or nil end
-  local cands = {
-    "/opt/homebrew/bin/ctags", "/opt/homebrew/opt/universal-ctags/bin/ctags",
-    "/usr/local/bin/ctags", "/usr/local/opt/universal-ctags/bin/ctags", "ctags",
-  }
-  for _, c in ipairs(cands) do
-    if vim.fn.executable(c) == 1 then
-      local v = vim.system({ c, "--version" }, { text = true }):wait()
-      if v.code == 0 and (v.stdout or ""):match("Universal Ctags") then
-        _ctags_bin = c; return c
-      end
-    end
-  end
-  _ctags_bin = false
-  return nil
-end
+-- ctags integration lives in config.review_ctags.
+local ctags = require("config.review_ctags")
+local tags_path = ctags.tags_path
 
--- Where the repo's tags file lives (per-repo, in the cache dir).
-local function tags_path(root)
-  local dir = vim.fn.stdpath("cache") .. "/review_view"
-  vim.fn.mkdir(dir, "p")
-  return dir .. "/" .. root:gsub("[^%w]", "_") .. ".tags"
-end
-
--- (Re)generate the tags file for the review's repo, asynchronously. Absolute paths
--- (--tag-relative=never) so tag lookups resolve from any buffer/cwd. Silent no-op
--- if Universal Ctags isn't installed — tag jumps just won't resolve.
 local function ensure_tags(st, force)
-  if not st or not st.tags_file then return end
-  local ctags = ctags_bin()
-  if not ctags then return end
-  if not force and vim.fn.filereadable(st.tags_file) == 1 then return end
-  -- ctags refuses to overwrite a target that "doesn't look like a tag file" — e.g.
-  -- an empty/garbage file left by an interrupted or killed run. We always regenerate,
-  -- so remove any existing target first; ctags then writes a fresh file with no refusal.
-  vim.fn.delete(st.tags_file)
-  vim.system({ ctags, "-R", "--tag-relative=never", "--fields=+n", "--exclude=.git",
-    "-f", st.tags_file, st.root }, { text = true }, vim.schedule_wrap(function(res)
-    if res.code ~= 0 then
-      vim.notify("review_view: ctags failed: " .. (res.stderr or ""), vim.log.levels.WARN)
-    end
-  end))
+  if st then ctags.ensure(st.root, st.tags_file, force) end
 end
 
 -- Manually rebuild the tags index (bound to gT-adjacent workflows / :lua if needed).
@@ -519,7 +413,7 @@ function M.retag()
   vim.notify("review_view: rebuilding tags…", vim.log.levels.INFO)
 end
 
-local function new_scratch(ft)
+local function new_scratch(ft, st)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].swapfile = false
@@ -527,7 +421,9 @@ local function new_scratch(ft)
   if ft then vim.bo[buf].filetype = ft end
   -- Point tag lookups (<C-]>, g], :tag) at the repo's ctags file so definition
   -- jumps work natively from the diff panes (which are scratch buffers).
-  if S and S.tags_file then pcall(function() vim.bo[buf].tags = S.tags_file end) end
+  -- `st` is the owning review, NOT the currently-active one — two open reviews
+  -- must not cross-wire their tags files.
+  if st and st.tags_file then pcall(function() vim.bo[buf].tags = st.tags_file end) end
   return buf
 end
 
@@ -571,111 +467,10 @@ function M.show_help()
   end
 end
 
--- Inverse of map_line: a diff-buffer row -> its source line (exact, else the
--- nearest mapped row above it, else 1). For untracked full-content buffers the
--- linemap is identity, so this returns the row unchanged.
-local function src_for_row(linemap, row)
-  if not linemap then return row end
-  local best_src, best_row
-  for src, r in pairs(linemap) do
-    if r == row then return src end
-    if r <= row and (not best_row or r > best_row) then best_row, best_src = r, src end
-  end
-  return best_src or 1
-end
-
--- Map a reported new-file line to a diff-buffer row (exact, else nearest <=, else 1).
-local function map_line(linemap, lnum)
-  if linemap[lnum] then return linemap[lnum] end
-  local best, best_row
-  for nl, row in pairs(linemap) do
-    if nl <= lnum and (not best or nl > best) then best, best_row = nl, row end
-  end
-  return best_row or 1
-end
-
--- Annotate a unified diff with new-file line numbers (added/context lines get an
--- "N<TAB>" prefix) so an LLM checker copies the number instead of counting lines.
-local function numbered_diff(diff)
-  local out, newln = {}, nil
-  for _, line in ipairs(vim.split(diff, "\n", { plain = true })) do
-    local h = line:match("^@@ %-%d+,?%d* %+(%d+)")
-    if h then
-      newln = tonumber(h); out[#out + 1] = line
-    elseif newln and not line:match("^%+%+%+") and not line:match("^%-%-%-")
-        and (line:sub(1, 1) == "+" or line:sub(1, 1) == " ") then
-      out[#out + 1] = ("%d\t%s"):format(newln, line); newln = newln + 1
-    else
-      out[#out + 1] = line
-    end
-  end
-  return table.concat(out, "\n")
-end
-
--- Classify per-line diff status of `path` between `left` and `right` (via -U0):
---   added[n]=true (green), changed[n]=true (yellow)  — n is a line in the RIGHT side,
---   dels = { { line=n, above=bool, lines={removed text} } }  (red, shown as virt lines)
--- `right` nil ⇒ the working tree (live view); a commit sha ⇒ that checkpoint.
-local function diff_status(root, left, right, path)
-  local added, changed, dels = {}, {}, {}
-  local cmd = { "git", "-C", root, "diff", "-U0", left }
-  if right then cmd[#cmd + 1] = right end
-  vim.list_extend(cmd, { "--", path })
-  local dl = vim.fn.systemlist(cmd)
-  local i = 1
-  while i <= #dl do
-    local nl, nc = dl[i]:match("^@@ %-%d+,?%d* %+(%d+),?(%d*) @@")
-    if nl then
-      nl, nc = tonumber(nl), (nc == "" and 1 or tonumber(nc))
-      local removed, j, adds = {}, i + 1, 0
-      while j <= #dl and not dl[j]:match("^@@") do
-        local c = dl[j]:sub(1, 1)
-        if c == "-" then removed[#removed + 1] = dl[j]:sub(2)
-        elseif c == "+" then adds = adds + 1 end
-        j = j + 1
-      end
-      if #removed == 0 then
-        for k = 0, nc - 1 do added[nl + k] = true end
-      elseif nc == 0 then
-        dels[#dels + 1] = { line = nl, above = false, lines = removed }   -- pure deletion
-      else
-        for k = 0, nc - 1 do changed[nl + k] = true end
-        dels[#dels + 1] = { line = nl, above = true, lines = removed }    -- replacement
-      end
-      i = j
-    else
-      i = i + 1
-    end
-  end
-  return added, changed, dels
-end
-
--- Parse the left→right diff for `path` into hunks, keeping each hunk's new-file
--- range (nl .. nl+nc-1) and its removed (base/develop) lines, so a single change
--- can be reverted to its base state. `right` nil ⇒ working tree (live view).
-local function parse_hunks(root, left, right, path)
-  local cmd = { "git", "-C", root, "diff", "-U0", left }
-  if right then cmd[#cmd + 1] = right end
-  vim.list_extend(cmd, { "--", path })
-  local dl = vim.fn.systemlist(cmd)
-  local hunks, i = {}, 1
-  while i <= #dl do
-    local nl, nc = dl[i]:match("^@@ %-%d+,?%d* %+(%d+),?(%d*) @@")
-    if nl then
-      nl, nc = tonumber(nl), (nc == "" and 1 or tonumber(nc))
-      local removed, j = {}, i + 1
-      while j <= #dl and not dl[j]:match("^@@") do
-        if dl[j]:sub(1, 1) == "-" then removed[#removed + 1] = dl[j]:sub(2) end
-        j = j + 1
-      end
-      hunks[#hunks + 1] = { nl = nl, nc = nc, removed = removed }
-      i = j
-    else
-      i = i + 1
-    end
-  end
-  return hunks
-end
+-- Diff parsing / line mapping lives in config.review_diff (pure functions).
+local rdiff = require("config.review_diff")
+local src_for_row, map_line, numbered_diff = rdiff.src_for_row, rdiff.map_line, rdiff.numbered_diff
+local diff_status, parse_hunks = rdiff.diff_status, rdiff.parse_hunks
 
 -- Build (and cache) the review buffer for one file. Default: the WHOLE file with
 -- the diff painted over it (green added, yellow changed, red deleted as virtual
@@ -883,12 +678,12 @@ end
 -- Resolve the configured checker list. Falls back to a single AI checker built
 -- from the existing settings_local.diff_review config.
 local function get_checkers()
-  local ok, sl = pcall(require, "config.settings_local")
-  local rv = ok and type(sl) == "table" and sl.review_view
-  if rv and type(rv.checkers) == "table" and #rv.checkers > 0 then
+  local rv = settings.get("review_view")
+  if type(rv) == "table" and type(rv.checkers) == "table" and #rv.checkers > 0 then
     return rv.checkers
   end
-  local dr = (ok and type(sl) == "table" and sl.diff_review) or {}
+  local dr = settings.get("diff_review")
+  dr = type(dr) == "table" and dr or {}
   local claude = dr.claude_command or vim.fn.exepath("claude")
   local cmd = { claude, "-p", "--no-session-persistence" }
   if dr.model then vim.list_extend(cmd, { "--model", dr.model }) end
@@ -1200,9 +995,7 @@ end
 -- Root of the per-ticket notes tree (…/tasks/<TICKET>/). Configurable so this
 -- isn't hard-wired to one checkout; defaults to the nbs-art tasks folder.
 local function tasks_root()
-  local ok, sl = pcall(require, "config.settings_local")
-  local t = ok and type(sl) == "table" and sl.tasks_dir
-  return vim.fn.expand(t or "~/sources/nbs-art/tasks")
+  return vim.fn.expand(settings.get("tasks_dir", "~/sources/nbs-art/tasks"))
 end
 
 -- Best-effort Jira ticket KEY for this review, no prompting: from the branch
@@ -1279,7 +1072,7 @@ function M.show_ticket(focus)
   local st = sync()
   if not st or not st.ticket then return end
   if not (st.ticket_buf and vim.api.nvim_buf_is_valid(st.ticket_buf)) then
-    st.ticket_buf = new_scratch("markdown")
+    st.ticket_buf = new_scratch("markdown", st)
     pcall(vim.api.nvim_buf_set_name, st.ticket_buf,
       unique_bufname("review://" .. st.repo .. "/" .. st.ticket.key))
   end
@@ -1550,7 +1343,7 @@ local function build_ui(st)
   -- later, and with the default "auto" the gutter would widen after the deleted
   -- lines are painted, knocking them out of alignment (paint_dels pads to textoff).
   vim.wo[st.diff_win].signcolumn = "yes:1"
-  st.placeholder_buf = new_scratch(nil)
+  st.placeholder_buf = new_scratch(nil, st)
   -- Build the COLOUR legend with real on-screen swatches: a swatch is a run of
   -- spaces highlighted with the actual line-background group, so the reader sees
   -- the colour rather than just its name. (Block glyphs wouldn't work — a bg-only
@@ -1637,7 +1430,7 @@ local function build_ui(st)
   -- left vertical split for the sidebar
   vim.cmd("topleft vsplit")
   st.sidebar_win = vim.api.nvim_get_current_win()
-  st.sidebar_buf = new_scratch("ReviewView")
+  st.sidebar_buf = new_scratch("ReviewView", st)
   -- Name the sidebar buffer after the repo so the tab label reads as the repo
   -- (focus stays here while browsing) instead of a generic "[Scratch]".
   pcall(vim.api.nvim_buf_set_name, st.sidebar_buf, unique_bufname("review://" .. st.repo))
