@@ -20,6 +20,7 @@ local MAX_DIFF_CHARS = 16000
 local NS = vim.api.nvim_create_namespace("review_view")          -- diagnostics
 local HL_NS = vim.api.nvim_create_namespace("review_view_hl")    -- +/- line backgrounds
 local SIDE_NS = vim.api.nvim_create_namespace("review_view_side") -- sidebar headers/counts
+local DEL_NS = vim.api.nvim_create_namespace("review_view_del")  -- deleted-line virt_lines (repainted on show)
 local SIDEBAR_WIDTH = 42
 -- Sentinel "directory" key for the collapsible Commits section (reuses the fold
 -- machinery in dir_index / st.collapsed without colliding with a real dir name).
@@ -377,13 +378,21 @@ local function render_sidebar(buf, st)
         if f.untracked then mk, mk_hl = "+", "ReviewViewAdd"
         elseif f.dirty then mk, mk_hl = "●", "ReviewViewDirty"
         elseif f.unpushed then mk, mk_hl = "↑", "ReviewViewNew" end
-        local prefix = "  " .. mk .. " "   -- 2 spaces + marker + space = same width as indent(4)
+        -- ◆ in the gutter (col 0) marks the file currently shown in the diff pane —
+        -- mirrors the ◆/● active-row marker in the Commits section. The git-status
+        -- marker keeps its column, just shifted right by the (fixed-width) gutter.
+        local curmk = (st.current_file and st.current_file.path == f.path) and "◆" or " "
+        local prefix = curmk .. " " .. mk .. " "   -- gutter mark + space + status marker + space (width 4)
         local row_text = prefix .. fit(name, namew) .. " "
           .. string.rep(" ", math.max(0, countw - #counts)) .. counts
         table.insert(lines, row_text)
         line_index[#lines] = f
+        if curmk ~= " " then
+          table.insert(hi, { row = #lines - 1, kind = "mark", a = 0, b = #curmk, hl = "ReviewViewNew" })
+        end
         if mk_hl then
-          table.insert(hi, { row = #lines - 1, kind = "mark", a = 2, b = 2 + #mk, hl = mk_hl })
+          local mstart = #curmk + 1   -- byte offset of the status marker (after gutter + space)
+          table.insert(hi, { row = #lines - 1, kind = "mark", a = mstart, b = mstart + #mk, hl = mk_hl })
         end
         -- color the counts (split into +adds / -dels for green/red)
         local cstart = #row_text - #counts
@@ -541,10 +550,15 @@ local function setup_diff_keymaps(buf)
   vim.keymap.set("n", "r", function() M.run_checkers_current() end, o)
   vim.keymap.set("n", "P", function() M.push() end, o)
   vim.keymap.set("n", "B", function() M.rebase() end, o)
-  vim.keymap.set("n", "gS", function() M.save_review() end, o)
   vim.keymap.set("n", "gJ", function() M.open_ticket() end, o)
   vim.keymap.set("n", "gh", function() M.view_live() end, o)
   vim.keymap.set("n", "X", function() M.revert_under_cursor() end, o)
+  -- J/K step files, U/D step commits — so you can flip through the review without
+  -- leaving the diff pane (read-only, so these safely shadow join/undo/delete).
+  vim.keymap.set("n", "J", function() M.step_file(1) end, o)
+  vim.keymap.set("n", "K", function() M.step_file(-1) end, o)
+  vim.keymap.set("n", "U", function() M.step_commit(-1) end, o)
+  vim.keymap.set("n", "D", function() M.step_commit(1) end, o)
   vim.keymap.set("n", "?", function() M.show_help() end, o)
   vim.keymap.set("n", "q", function() M.close() end, o)
 end
@@ -770,20 +784,22 @@ local function ensure_file_buf(st, entry)
         vim.api.nvim_buf_set_extmark(buf, HL_NS, n - 1, 0, { line_hl_group = hl })
       end
     end
-    -- Deleted lines are drawn as virt_lines, which start at screen column 0 (they
-    -- get no line number of their own). Pad them by the number-column width so the
-    -- removed code aligns under the numbered content instead of poking into the
-    -- gutter; the del highlight is what marks them as removed, no "- " needed.
-    local del_pad = string.rep(" ", math.max(vim.o.numberwidth, #tostring(#content) + 1))
+    -- Deleted lines render as virt_lines, which start at screen column 0 with no
+    -- number/sign/fold gutter of their own — so they must be padded by the window's
+    -- gutter width to line up under the code. That width isn't known until the
+    -- buffer is shown (and grows when checker findings add signs), so stash the del
+    -- data here and let paint_dels() draw it with the live gutter width at show time.
+    local del_data = {}
     for _, d in ipairs(dels) do
       local is_new = entry.untracked or new_del_anchor[d.line] or false
-      local dhl = is_new and "ReviewViewDelLineNew" or "ReviewViewDelLine"
-      local virt = {}
-      for _, rl in ipairs(d.lines) do virt[#virt + 1] = { { del_pad .. rl, dhl } } end
-      local above = d.above or d.line == 0
-      local row = math.max(0, (d.line == 0 and 1 or d.line) - 1)
-      vim.api.nvim_buf_set_extmark(buf, HL_NS, row, 0, { virt_lines = virt, virt_lines_above = above })
+      del_data[#del_data + 1] = {
+        row = math.max(0, (d.line == 0 and 1 or d.line) - 1),
+        above = d.above or d.line == 0,
+        lines = d.lines,
+        dhl = is_new and "ReviewViewDelLineNew" or "ReviewViewDelLine",
+      }
     end
+    st.dels[path] = del_data
   elseif absent_at_commit then
     -- Browsing a checkpoint where this file simply does not exist yet (or was
     -- removed by that commit): nothing to diff, so say so instead of a blank pane.
@@ -826,6 +842,28 @@ local function ensure_file_buf(st, entry)
   return buf, diff, linemap
 end
 
+-- (Re)draw the stashed deleted-line virt_lines for `path`, padded to the diff
+-- window's CURRENT gutter width (getwininfo.textoff = number+sign+fold columns) so
+-- the removed code aligns under the numbered content. Own namespace so it can be
+-- cleared/redrawn on every show without disturbing the +/- line backgrounds.
+local function paint_dels(st, path)
+  local buf = st.file_bufs[path]
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
+  vim.api.nvim_buf_clear_namespace(buf, DEL_NS, 0, -1)
+  local data = st.dels and st.dels[path]
+  if not data or #data == 0 then return end
+  local pad = ""
+  if vim.api.nvim_win_is_valid(st.diff_win) then
+    local wi = vim.fn.getwininfo(st.diff_win)[1]
+    if wi and wi.textoff and wi.textoff > 0 then pad = string.rep(" ", wi.textoff) end
+  end
+  for _, d in ipairs(data) do
+    local virt = {}
+    for _, rl in ipairs(d.lines) do virt[#virt + 1] = { { pad .. rl, d.dhl } } end
+    vim.api.nvim_buf_set_extmark(buf, DEL_NS, d.row, 0, { virt_lines = virt, virt_lines_above = d.above })
+  end
+end
+
 -- Display a file's diff in the right pane (no checker run).
 local function show_file(st, entry)
   if not entry then return end
@@ -834,6 +872,11 @@ local function show_file(st, entry)
   if vim.api.nvim_win_is_valid(st.diff_win) then
     vim.api.nvim_win_set_buf(st.diff_win, buf)
     pcall(vim.api.nvim_win_set_cursor, st.diff_win, { 1, 0 })
+    paint_dels(st, entry.path)   -- gutter width is known now the buffer is in the window
+  end
+  -- keep the ◆ current-file marker in the sidebar tracking the shown file
+  if st.sidebar_buf and vim.api.nvim_buf_is_valid(st.sidebar_buf) then
+    render_sidebar(st.sidebar_buf, st)
   end
 end
 
@@ -901,6 +944,8 @@ local function qf_show(idx)
   vim.api.nvim_win_set_buf(S.diff_win, it.bufnr)
   vim.api.nvim_set_current_win(S.diff_win)
   pcall(vim.api.nvim_win_set_cursor, S.diff_win, { it.lnum > 0 and it.lnum or 1, 0 })
+  local p = M.file_for(it.bufnr)
+  if p then paint_dels(S, p) end   -- realign deleted lines for the gutter this buffer shows with
 end
 
 function M.qf_jump() qf_show(vim.fn.line(".")) end                              -- from qf win: line == index
@@ -1172,14 +1217,6 @@ local function ticket_key(st)
   return nil
 end
 
--- Same, but ask the user if it can't be inferred (used by the gS save flow).
-local function detect_ticket(st)
-  return ticket_key(st) or (function()
-    local ans = vim.trim(vim.fn.input("Ticket for this review (e.g. NBSART-595): "))
-    return ans ~= "" and ans or nil
-  end)()
-end
-
 -- Fetch Jira `key` (async), store it on st.ticket, mirror it into the tasks dir,
 -- refresh the sidebar node, then call cb() (if given). Notifies on failure.
 local function fetch_ticket(st, key, cb)
@@ -1279,127 +1316,6 @@ function M.open_ticket()
   fetch_ticket(st, key, function() M.show_ticket(true) end)
 end
 
--- Generate a graded (HIGH/MEDIUM/LOW) markdown review of the WHOLE MR/branch via
--- a headless `claude -p`, and save it to <tasks>/<TICKET>/review-<repo>-mr<iid>.md.
--- Bound to `gS` in the review view. Deterministic header is built here; the AI
--- only writes the Summary + Concerns so it can't fabricate stats/dates.
-function M.save_review()
-  local st = sync()
-  if not st then return end
-  local rc = require("config.review_context")
-
-  local diff = rc.diff(st.root, st.merge_base, nil, nil, { right_is_local = true }) or ""
-  if vim.trim(diff) == "" then
-    vim.notify("review_view: no changes to review", vim.log.levels.INFO); return
-  end
-
-  local ticket = detect_ticket(st)
-  if not ticket then vim.notify("review_view: no ticket — aborted", vim.log.levels.WARN); return end
-
-  -- deterministic header facts
-  local _, short = git(st.root, { "diff", "--shortstat", st.merge_base })
-  local stats = vim.trim((short and short[1]) or "")
-  local _, cnt = git(st.root, { "rev-list", "--count", st.merge_base .. "..HEAD" })
-  local ncommits = (cnt and cnt[1]) or "?"
-  local _, authors = git(st.root, { "log", st.merge_base .. "..HEAD", "--format=%an" })
-  local seen, alist = {}, {}
-  for _, a in ipairs(authors or {}) do
-    if a ~= "" and not seen[a] then seen[a] = true; alist[#alist + 1] = a end
-  end
-  local author = #alist > 0 and table.concat(alist, ", ") or "?"
-  local mr = st.mr_iid and (" !" .. st.mr_iid) or ""
-
-  local hlines = { ("# MR Review: %s%s"):format(st.repo, mr), "" }
-  if st.ticket then
-    table.insert(hlines, ("**Ticket:** [%s] %s  "):format(st.ticket.key, st.ticket.summary))
-  end
-  vim.list_extend(hlines, {
-    ("**Author:** %s  "):format(author),
-    ("**Branch:** `%s` → `%s`  "):format(st.head_ref, (st.base or ""):gsub("^" .. remote_name() .. "/", "")),
-    ("**Stats:** %s commit(s), %s  "):format(ncommits, stats ~= "" and stats or "no diffstat"),
-    ("**Date:** %s"):format(os.date("%Y-%m-%d")),
-    "",
-  })
-  local header = table.concat(hlines, "\n")
-
-  -- keep the prompt sane on huge MRs; cut back to a whole line
-  local MAX = 60000
-  if #diff > MAX then
-    diff = diff:sub(1, MAX)
-    diff = diff:sub(1, (diff:match(".*()\n") or (#diff + 1)) - 1)
-      .. "\n[... diff truncated for length; review what is shown, do not flag the cut-off ...]"
-  end
-  local subjects = rc.format_subjects(rc.commit_subjects(st.root, st.merge_base, "HEAD", 30))
-  local prompt = table.concat({
-    "You are reviewing a merge request. Produce a graded markdown review.",
-    "Output ONLY two sections, starting directly with `## Summary` — no preamble, no code fences around the whole thing:",
-    "  ## Summary   — 1 short paragraph on intent, then a `Key changes:` bullet list.",
-    "  ## Concerns  — group findings under `### HIGH`, `### MEDIUM`, `### LOW` (omit empty groups).",
-    "    Number each finding `#### N. <title>`, describe it, cite `path:line`, and add a **Fix:** or",
-    "    **Suggestion:** line (code fences fine inside a finding). If nothing is wrong, say so under Summary.",
-    "Focus on bugs, security, logic/type errors, and changes that don't serve the MR's intent.",
-    st.ticket and "Judge the change against the Jira ticket below: flag gaps vs its requirements and scope creep." or "",
-    "",
-    st.ticket and ("Jira ticket (intended behaviour):\n" .. table.concat(st.ticket.md, "\n") .. "\n") or "",
-    subjects and ("Commits:\n" .. subjects .. "\n") or "",
-    "Repo: " .. st.repo .. (st.mr_iid and ("  MR: !" .. st.mr_iid) or ""),
-    "Base: " .. (st.base or "?"),
-    "",
-    "Full diff (" .. st.base .. " → MR head):",
-    "```diff",
-    diff,
-    "```",
-  }, "\n")
-
-  local ok, sl = pcall(require, "config.settings_local")
-  local dr = (ok and type(sl) == "table" and sl.diff_review) or {}
-  local claude = dr.claude_command or vim.fn.exepath("claude")
-  if not claude or claude == "" then
-    vim.notify("review_view: no `claude` command found (set diff_review.claude_command)", vim.log.levels.ERROR)
-    return
-  end
-  local cmd = { claude, "-p", "--no-session-persistence" }
-  if dr.model then vim.list_extend(cmd, { "--model", dr.model }) end
-
-  vim.notify(("review_view: generating review for %s%s…"):format(st.repo, mr), vim.log.levels.INFO)
-  local body = {}
-  require("config.agent_runner").run_cmd(cmd, {
-    label = "save-review:" .. ticket,
-    cwd = st.root,
-    env = vim.tbl_extend("force", { CLAUDECODE = "" }, dr.env or {}),
-    stdin = prompt,
-    on_line = function(line) body[#body + 1] = line end,
-    on_exit = function(code, stderr)
-      vim.schedule(function()
-        if code ~= 0 then
-          vim.notify(("review_view: review failed (exit %d)\n%s"):format(code, stderr), vim.log.levels.ERROR)
-          return
-        end
-        local md = header .. vim.trim(table.concat(body, "\n")) .. "\n"
-
-        local dir = tasks_root() .. "/" .. ticket
-        vim.fn.mkdir(dir, "p")
-        local base_name = st.mr_iid and ("review-%s-mr%s"):format(st.repo, st.mr_iid)
-          or ("review-%s-%s"):format(st.repo, ticket)
-        local file = dir .. "/" .. base_name .. ".md"
-        if vim.fn.filereadable(file) == 1 then
-          local pick = vim.fn.confirm(("%s exists."):format(vim.fn.fnamemodify(file, ":~")),
-            "&Overwrite\n&New file\n&Cancel", 3)
-          if pick == 3 then vim.notify("review_view: save cancelled", vim.log.levels.INFO); return end
-          if pick == 2 then
-            local i = 2
-            while vim.fn.filereadable(dir .. "/" .. base_name .. "-" .. i .. ".md") == 1 do i = i + 1 end
-            file = dir .. "/" .. base_name .. "-" .. i .. ".md"
-          end
-        end
-        vim.fn.writefile(vim.split(md, "\n", { plain = true }), file)
-        vim.notify("review_view: saved → " .. vim.fn.fnamemodify(file, ":~"), vim.log.levels.INFO)
-        vim.cmd("tabedit " .. vim.fn.fnameescape(file))
-      end)
-    end,
-  })
-end
-
 -- Close the review in the CURRENT tab (each tab holds its own review).
 -- Returns true if one was open and got closed, false otherwise.
 function M.close()
@@ -1456,7 +1372,7 @@ function M.refresh()
   for _, b in pairs(st.file_bufs) do
     if vim.api.nvim_buf_is_valid(b) then pcall(vim.api.nvim_buf_delete, b, { force = true }) end
   end
-  st.file_bufs, st.diffs, st.linemaps = {}, {}, {}
+  st.file_bufs, st.diffs, st.linemaps, st.dels = {}, {}, {}, {}
   st.items, st.done, st.inflight = {}, {}, {}
   st.current_file = nil
   -- deleting the file buffers above already cleared their diagnostics; only clear
@@ -1533,6 +1449,68 @@ function M.view_live()
   vim.notify("review_view: back to live (working tree)", vim.log.levels.INFO)
 end
 
+-- The visible file rows in sidebar order, as { row, entry }. Skips folder headers
+-- and the ticket/commit/live nodes, and (naturally) files inside collapsed folders.
+local function file_rows(st)
+  local out, rows = {}, {}
+  for row in pairs(st.line_index or {}) do rows[#rows + 1] = row end
+  table.sort(rows)
+  for _, row in ipairs(rows) do
+    local e = st.line_index[row]
+    if e and e.path and not (e.ticket or e.commit or e.live) then
+      out[#out + 1] = { row = row, entry = e }
+    end
+  end
+  return out
+end
+
+-- J/K: step to the next/prev file in the tree (dir = +1 / -1) and show its diff,
+-- keeping the sidebar cursor in sync. Clamps at the ends (no wrap).
+function M.step_file(dir)
+  local st = sync()
+  if not st then return end
+  local files = file_rows(st)
+  if #files == 0 then return end
+  local cur = st.current_file and st.current_file.path
+  local idx
+  for i, f in ipairs(files) do if f.entry.path == cur then idx = i; break end end
+  local nxt = idx and (idx + dir) or (dir > 0 and 1 or #files)
+  if nxt < 1 or nxt > #files then return end
+  local f = files[nxt]
+  show_file(st, f.entry)
+  if vim.api.nvim_win_is_valid(st.sidebar_win) then
+    pcall(vim.api.nvim_win_set_cursor, st.sidebar_win, { f.row, 0 })
+  end
+end
+
+-- U/D: step through the checkpoint list (index 1 = working-tree/live, then the
+-- commits newest→oldest). dir = -1 moves up toward live, +1 down toward older.
+-- The currently-open file follows the switch (see M.refresh). Clamps at the ends.
+function M.step_commit(dir)
+  local st = sync()
+  if not st then return end
+  local targets = { { live = true } }
+  for _, c in ipairs(st.commits or {}) do targets[#targets + 1] = { commit = c.sha } end
+  if #targets <= 1 then return end
+  local idx = 1
+  if st.view_ref then
+    for i = 2, #targets do if targets[i].commit == st.view_ref then idx = i; break end end
+  end
+  local nxt = idx + dir
+  if nxt < 1 or nxt > #targets then return end
+  local t = targets[nxt]
+  if t.live then M.view_live() else M.view_commit(t.commit) end
+  -- park the sidebar cursor on the now-active commit/live row (line_index is fresh
+  -- after the refresh that view_live/view_commit triggered)
+  if vim.api.nvim_win_is_valid(st.sidebar_win) then
+    for row, e in pairs(st.line_index or {}) do
+      if (t.live and e.live) or (e.commit and e.commit == t.commit) then
+        pcall(vim.api.nvim_win_set_cursor, st.sidebar_win, { row, 0 }); break
+      end
+    end
+  end
+end
+
 local function entry_under_cursor()
   if not sync() then return nil end
   local row = vim.api.nvim_win_get_cursor(0)[1]
@@ -1568,6 +1546,10 @@ local function build_ui(st)
   -- current window becomes the diff (right) pane; start with an empty placeholder
   -- so nothing runs until the user selects a file.
   st.diff_win = vim.api.nvim_get_current_win()
+  -- Pin the sign column to a fixed width: checker findings add diagnostic signs
+  -- later, and with the default "auto" the gutter would widen after the deleted
+  -- lines are painted, knocking them out of alignment (paint_dels pads to textoff).
+  vim.wo[st.diff_win].signcolumn = "yes:1"
   st.placeholder_buf = new_scratch(nil)
   -- Build the COLOUR legend with real on-screen swatches: a swatch is a run of
   -- spaces highlighted with the actual line-background group, so the reader sees
@@ -1602,23 +1584,26 @@ local function build_ui(st)
     "  COMMITS   browse each commit as a checkpoint (in the Commits section)",
     "    ⏎ on a commit  view it as if it were HEAD    s  view that commit only",
     "    ⏎ on 'working tree (live)' or gh anywhere    back to the live view",
+    "    U / D   step commits up (→ live) / down (→ older), file follows",
     "",
     "  SIDEBAR (file list)",
     "    ⏎      show diff / fold / ticket     r        run checkers",
+    "    J / K   next / prev file             U / D    step commits (→live / →older)",
     "    gJ      open Jira ticket (asks for key if unknown) → main window + tasks/",
     "    Tab/za  fold folder                  zM/zR    fold / unfold all",
     "    X       revert WHOLE file → base     C        CodeCompanion chat",
     "    P       push (Force option)          B        rebase onto latest base",
     "    R       refresh                      ]q/[q    prev / next finding",
-    "    gS      save graded review → tasks   q        close review",
+    "    q       close review",
     "",
     "  DIFF PANE",
     "    e       edit file in a tab           C        CodeCompanion (n/v)",
+    "    J / K   next / prev file             U / D    step commits (→live / →older)",
     "    <C-]>   go to definition (gd/]d)     <C-t>    jump back  ·  r  run checkers",
     "    B       rebase onto latest base      P        push (Force option)",
     "    X       revert change under cursor → base (develop)",
     "    ]q/[q   prev / next finding          R        refresh",
-    "    gS      save graded review → tasks   gJ       open Jira ticket → main window",
+    "    gJ      open Jira ticket → main window",
     "    q       close review",
     "",
     "  EDIT TAB (after pressing e)",
@@ -1690,9 +1675,12 @@ local function build_ui(st)
   vim.keymap.set("n", "R", function() M.refresh() end, o)
   vim.keymap.set("n", "P", function() M.push() end, o)
   vim.keymap.set("n", "B", function() M.rebase() end, o)
-  vim.keymap.set("n", "gS", function() M.save_review() end, o)
   vim.keymap.set("n", "gJ", function() M.open_ticket() end, o)
   vim.keymap.set("n", "X", function() M.revert_file_under_cursor() end, o)
+  vim.keymap.set("n", "J", function() M.step_file(1) end, o)
+  vim.keymap.set("n", "K", function() M.step_file(-1) end, o)
+  vim.keymap.set("n", "U", function() M.step_commit(-1) end, o)
+  vim.keymap.set("n", "D", function() M.step_commit(1) end, o)
   vim.keymap.set("n", "C", function() M.codecompanion({ entry = entry_under_cursor() }) end, o)
   vim.keymap.set("n", "?", function() M.show_help() end, o)
   vim.keymap.set("n", "q", M.close, o)
@@ -1758,12 +1746,12 @@ function M.open(path, opts)
     root = root, base = base, head_ref = head_ref, merge_base = merge_base,
     pushed_ref = pushed_ref,   -- @{u} sha: reference for pushed-vs-unpushed colours
     repo = repo_name(root), tags_file = tags_path(root),
-    mr_iid = opts.mr_iid,   -- set by :ReviewMR; used to name the saved review file
+    mr_iid = opts.mr_iid,   -- set by :ReviewMR; the GitLab MR number this review came from
     on_close = opts.on_close,
     files = files, collapsed = {},
     commits = list_commits(root, merge_base, "HEAD", 200),  -- checkpoints to browse
     view_ref = nil, view_left = nil, view_short = nil, view_single = nil,  -- live by default
-    file_bufs = {}, diffs = {}, linemaps = {},  -- per-file caches
+    file_bufs = {}, diffs = {}, linemaps = {}, dels = {},  -- per-file caches
     items = {},                                 -- accumulated quickfix items (tagged _file/_checker)
     inflight = {}, done = {},                    -- path -> running count / completed
   }

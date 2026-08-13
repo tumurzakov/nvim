@@ -35,8 +35,8 @@ local vim_text = [[
                   F10  Dictate (voice → text)
 
  GIT & REVIEW
- gR   Patch review (r=run e=edit P=push B=rebase X=revert gS=save gJ=jira ]q/[q=nav zM/zR=fold)
- :ReviewMR <gitlab-mr-url>  fetch peer MR → gR vs develop  (gJ=view Jira ticket, gS=save graded review → tasks/<TICKET>/)
+ gR   Patch review (J/K=file U/D=commit r=run e=edit P=push B=rebase X=revert gJ=jira ]q/[q=nav zM/zR=fold)
+ :ReviewMR <gitlab-mr-url>  fetch peer MR → gR vs develop  (gJ=view Jira ticket)
  \gc  Close review view
  \kd  Drop sel/file:line → Claude kitty tab   \kf  Drop file path
 

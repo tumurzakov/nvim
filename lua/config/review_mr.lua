@@ -172,7 +172,7 @@ function M.review(arg)
     -- Each MR review opens in its own tab (gR supports several at once).
     require("config.review_view").open(wtdir, {
       head_label = label,
-      mr_iid = iid,   -- names the saved review file (gS): review-<repo>-mr<iid>.md
+      mr_iid = iid,   -- the GitLab MR number this review was opened from
       on_close = function() untrack_worktree(root, wtdir) end,
     })
     vim.notify(("ReviewMR: reviewing !%d (%s) vs %s — working folder untouched"):format(iid, label, base),

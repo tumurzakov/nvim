@@ -72,15 +72,13 @@ M.codecompanion = {
 -- switcher. Defaults to "origin".
 -- M.git_remote = "origin"
 
--- Where `gS` (save a graded MR/branch review) writes its markdown, under a
--- per-ticket subfolder: <tasks_dir>/<TICKET>/review-<repo>-mr<iid>.md (or
--- review-<repo>-<ticket>.md for a non-MR review). Defaults to ~/sources/nbs-art/tasks.
--- Also where the Jira ticket mirror (<TICKET>/ticket.md) is written.
+-- Root of the per-ticket notes tree: where the Jira ticket mirror
+-- (<tasks_dir>/<TICKET>/ticket.md) is written. Defaults to ~/sources/nbs-art/tasks.
 -- M.tasks_dir = "~/sources/nbs-art/tasks"
 
 -- Jira ticket integration for the review view. OFF by default — the whole
 -- feature (gR sidebar ticket node + tasks/<TICKET>/ticket.md mirror, the gJ
--- hotkey, gS review enrichment, and the :ReviewMR GitLab branch lookup) is gated
+-- hotkey, and the :ReviewMR GitLab branch lookup) is gated
 -- by `enabled` and makes NO external calls unless you turn it on. Leave it off in
 -- environments without Jira (e.g. Novartis).
 --   enabled  master trigger — must be true for any of the above to run
