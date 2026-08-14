@@ -162,6 +162,28 @@ local function collect_files(root, base, merge_base, head, pushed_ref)
       end
     end
   end
+  -- Files whose working tree matches the base again but still differ from HEAD: a
+  -- committed change undone in the tree (e.g. reverted with X). Their base…tree diff
+  -- is empty, so the numstat above skipped them — but the undo IS uncommitted work,
+  -- so list it and count it against HEAD instead of the base.
+  for path in pairs(dirty) do
+    if not seen[path] then
+      local rok, rout = git(root, { "diff", "--numstat", "HEAD", "--", path })
+      local a, d = (rok and rout[1] or ""):match("^(%S+)\t(%S+)\t")
+      local binary = (a == "-" or d == "-")
+      files[#files + 1] = {
+        path = path,
+        adds = binary and 0 or tonumber(a) or 0,
+        dels = binary and 0 or tonumber(d) or 0,
+        binary = binary,
+        committed = committed[path] or false,
+        dirty = true,
+        reverted = true,
+        unpushed = unpushed[path] or false,
+      }
+      seen[path] = true
+    end
+  end
   -- untracked files (new, not yet added) — all-added when shown
   local uok, uout = git(root, { "ls-files", "--others", "--exclude-standard" })
   if uok then
@@ -274,6 +296,11 @@ local function render_sidebar(buf, st)
   end
   if not st.view_ref then
     table.insert(lines, "↑ unpushed  ● uncommitted  + new")
+    -- Only worth a line when it applies: a file back at base but still ≠ HEAD is
+    -- rare, and its +/- counts are against HEAD rather than the base.
+    local any_reverted = false
+    for _, f in ipairs(st.files) do if f.reverted then any_reverted = true; break end end
+    if any_reverted then table.insert(lines, "↺ reverted to base (vs HEAD, uncommitted)") end
   end
   table.insert(lines, "? help   q quit   R reload   C chat")
   table.insert(lines, "")
@@ -306,10 +333,12 @@ local function render_sidebar(buf, st)
       for _, f in ipairs(groups[dir]) do
         local name = vim.fn.fnamemodify(f.path, ":t")
         local counts = f.binary and "bin" or ("+%d -%d"):format(f.adds, f.dels)
-        -- status marker (most-specific state wins): + new (untracked), ● uncommitted
-        -- (dirty), ↑ committed-but-unpushed, blank = committed and already pushed
+        -- status marker (most-specific state wins): + new (untracked), ↺ reverted
+        -- (back to base, undoing a commit), ● uncommitted (dirty), ↑ committed-but-
+        -- unpushed, blank = committed and already pushed
         local mk, mk_hl = " ", nil
         if f.untracked then mk, mk_hl = "+", "ReviewViewAdd"
+        elseif f.reverted then mk, mk_hl = "↺", "ReviewViewDirty"
         elseif f.dirty then mk, mk_hl = "●", "ReviewViewDirty"
         elseif f.unpushed then mk, mk_hl = "↑", "ReviewViewNew" end
         -- ◆ in the gutter (col 0) marks the file currently shown in the diff pane —
@@ -446,6 +475,10 @@ local function setup_diff_keymaps(buf)
   vim.keymap.set("n", "r", function() M.run_checkers_current() end, o)
   vim.keymap.set("n", "P", function() M.push() end, o)
   vim.keymap.set("n", "B", function() M.rebase() end, o)
+  -- `c` / `A` are free here: the diff buffers are non-modifiable, so the change
+  -- and append operators would only ever error.
+  vim.keymap.set("n", "c", function() M.commit() end, o)
+  vim.keymap.set("n", "A", function() M.amend() end, o)
   vim.keymap.set("n", "gJ", function() M.open_ticket() end, o)
   vim.keymap.set("n", "gh", function() M.view_live() end, o)
   vim.keymap.set("n", "X", function() M.revert_under_cursor() end, o)
@@ -492,6 +525,11 @@ local function ensure_file_buf(st, entry)
   -- (single-commit view).
   local right = st.view_ref
   local left = st.view_left or st.merge_base
+  -- A file reverted to its base state has an EMPTY base…working-tree diff, so the
+  -- pane would render as a plain unhighlighted file. The undo is still uncommitted
+  -- work worth reviewing, so diff it against HEAD instead: the lines the revert took
+  -- out show red, the base lines it restored show green.
+  if entry.reverted and not right then left = "HEAD" end
 
   -- the real unified diff is kept for the checker prompt regardless of how we render
   local diff
@@ -686,17 +724,8 @@ local function get_checkers()
   if type(rv) == "table" and type(rv.checkers) == "table" and #rv.checkers > 0 then
     return rv.checkers
   end
-  local dr = settings.get("diff_review")
-  dr = type(dr) == "table" and dr or {}
-  local claude = dr.claude_command or vim.fn.exepath("claude")
-  local cmd = { claude, "-p", "--no-session-persistence" }
-  if dr.model then vim.list_extend(cmd, { "--model", dr.model }) end
-  return { {
-    name = "ai",
-    cmd = cmd,
-    input = "prompt",
-    env = vim.tbl_extend("force", { CLAUDECODE = "" }, dr.env or {}),
-  } }
+  local cmd, env = settings.ai_command()
+  return { { name = "ai", cmd = cmd, input = "prompt", env = env } }
 end
 
 -- Rebuild quickfix + per-buffer diagnostics from the accumulated item list.
@@ -953,6 +982,59 @@ function M.push()
   elseif choice == 2 then
     push_branch(root, remote, branch, true)
   end
+end
+
+-- Commit the working tree from inside the review (c): the AI drafts a message
+-- from the uncommitted diff, you confirm or edit it in a float, then everything
+-- is staged and committed and the review refreshes. Refuses on a detached HEAD
+-- (ReviewMR worktree) and while browsing a checkpoint.
+-- Shared preflight for c / A: the review must be live (not a checkpoint) and on a
+-- real branch. Returns branch, on_done — or nil after notifying why not.
+local function commit_context(st, what)
+  if st.view_ref then
+    vim.notify(("review_view: %s unavailable while viewing a commit — press gh for live"):format(what),
+      vim.log.levels.WARN)
+    return nil
+  end
+  local ok, br = git(st.root, { "symbolic-ref", "--quiet", "--short", "HEAD" })
+  local branch = ok and br[1] or nil
+  if not branch or branch == "" then
+    vim.notify(("review_view: HEAD is detached (MR review?) — refusing to %s"):format(what),
+      vim.log.levels.WARN)
+    return nil
+  end
+  return branch, function()
+    -- The draft is async, so the user may have wandered off; refresh() acts on
+    -- the active tab, so bring this review's tab back first.
+    if not is_live(st) or not vim.api.nvim_tabpage_is_valid(st.tabpage) then return end
+    vim.api.nvim_set_current_tabpage(st.tabpage)
+    M.refresh()
+  end
+end
+
+function M.commit()
+  local st = sync()
+  if not st then return end
+  local branch, on_done = commit_context(st, "commit")
+  if not branch then return end
+  require("config.review_commit").commit(st.root, { branch = branch, on_done = on_done })
+end
+
+-- Fold the working tree into the last commit (A). Refuses when HEAD is the merge
+-- base — there the last commit belongs to the base branch, and amending it would
+-- rewrite develop rather than your own work.
+function M.amend()
+  local st = sync()
+  if not st then return end
+  local branch, on_done = commit_context(st, "amend")
+  if not branch then return end
+  local okc, cnt = git(st.root, { "rev-list", "--count", st.merge_base .. "..HEAD" })
+  if not okc or (tonumber(cnt[1]) or 0) == 0 then
+    vim.notify(("review_view: no commits of your own on %s — nothing to amend (use c to commit)"):format(branch),
+      vim.log.levels.WARN)
+    return
+  end
+  require("config.review_commit").amend(st.root, { branch = branch, on_done = on_done })
 end
 
 -- Rebase the current branch onto the latest base (B): fetch <remote>/develop,
@@ -1377,6 +1459,7 @@ local function build_ui(st)
     vivid_text .. "  vivid = unpushed (new since last push)",
     dim_text .. "  dim = already pushed",
     "  sidebar marks:  ↑ unpushed   ● uncommitted   + new   (blank = pushed)",
+    "                  ↺ reverted to base — shown vs HEAD (the undo itself)",
     "",
     "  COMMITS   browse each commit as a checkpoint (in the Commits section)",
     "    ⏎ on a commit  view it as if it were HEAD    s  view that commit only",
@@ -1389,6 +1472,8 @@ local function build_ui(st)
     "    gJ      open Jira ticket (asks for key if unknown) → main window + tasks/",
     "    Tab/za  fold folder                  zM/zR    fold / unfold all",
     "    X       revert WHOLE file → base     C        CodeCompanion chat",
+    "    c       commit (AI message, editable, then stages & commits everything)",
+    "    A       amend last commit (Reword with AI / Keep message)",
     "    P       push (Force option)          B        rebase onto latest base",
     "    R       refresh                      ]q/[q    prev / next finding",
     "    q       close review",
@@ -1398,6 +1483,7 @@ local function build_ui(st)
     "    J / K   next / prev file             U / D    step commits (→live / →older)",
     "    <C-]>   go to definition (gd/]d)     <C-t>    jump back  ·  r  run checkers",
     "    B       rebase onto latest base      P        push (Force option)",
+    "    c       commit (AI message, editable)   A     amend last commit",
     "    X       revert change under cursor → base (develop)",
     "    ]q/[q   prev / next finding          R        refresh",
     "    gJ      open Jira ticket → main window",
@@ -1472,6 +1558,8 @@ local function build_ui(st)
   vim.keymap.set("n", "R", function() M.refresh() end, o)
   vim.keymap.set("n", "P", function() M.push() end, o)
   vim.keymap.set("n", "B", function() M.rebase() end, o)
+  vim.keymap.set("n", "c", function() M.commit() end, o)
+  vim.keymap.set("n", "A", function() M.amend() end, o)
   vim.keymap.set("n", "gJ", function() M.open_ticket() end, o)
   vim.keymap.set("n", "X", function() M.revert_file_under_cursor() end, o)
   vim.keymap.set("n", "J", function() M.step_file(1) end, o)
@@ -1659,6 +1747,13 @@ function M.revert_under_cursor()
   end
   local entry = st.current_file
   local abspath = st.root .. "/" .. path
+  -- This pane shows the undo vs HEAD, not a base…tree change, so there is no hunk
+  -- to send back to base — the file is already there.
+  if entry and entry.reverted then
+    vim.notify(("review_view: %s already matches %s — nothing to revert"):format(path, st.base or "base"),
+      vim.log.levels.INFO)
+    return
+  end
   if (entry and (entry.binary or entry.untracked)) or vim.fn.filereadable(abspath) ~= 1 then
     vim.notify("review_view: revert only supported for tracked text files", vim.log.levels.WARN)
     return
@@ -1737,6 +1832,11 @@ function M.revert_file_under_cursor()
   end
   local path = e.path
   local abspath = st.root .. "/" .. path
+  if e.reverted then
+    vim.notify(("review_view: %s already matches %s — nothing to revert (commit it with c)"):format(
+      path, st.base or "base"), vim.log.levels.INFO)
+    return
+  end
 
   vim.fn.systemlist({ "git", "-C", st.root, "cat-file", "-e", st.merge_base .. ":" .. path })
   local in_base = vim.v.shell_error == 0
