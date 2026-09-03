@@ -152,6 +152,10 @@ map("n", "<leader>kf", function() require("config.kitty_drop").send_path() end, 
 -- Diagnostics (updatetime lives in config.options)
 vim.api.nvim_create_autocmd("CursorHold", { callback = open_diagnostics_float })
 
+-- Reload changed files and restart the servers, for when a diagnostic is
+-- clearly describing a version of the code that no longer exists.
+map("n", "<leader>lr", function() require("config.file_reload").resync() end, { desc = "LSP: recheck files on disk and restart" })
+
 -- Terminal tab navigation
 map("t", "<C-b>n", function()
   require("config.vim_util").leave_terminal_mode()
