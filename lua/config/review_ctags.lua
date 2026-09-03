@@ -30,6 +30,12 @@ function M.tags_path(root)
   return dir .. "/" .. root:gsub("[^%w]", "_") .. ".tags"
 end
 
+-- Runs in flight, keyed by tags_file: { pending = bool }. Opening the review view
+-- triggers several ensure(force) calls in a row; without this, a later run's delete
+-- would unlink the file an earlier run is still writing, and that run's `sort -u -o
+-- <file> <file>` would die with "sort: No such file or directory".
+local running = {}
+
 -- (Re)generate `tags_file` for `root`, asynchronously. Absolute paths
 -- (--tag-relative=never) so tag lookups resolve from any buffer/cwd. Silent no-op
 -- if Universal Ctags isn't installed — tag jumps just won't resolve.
@@ -38,15 +44,42 @@ function M.ensure(root, tags_file, force)
   local ctags = M.bin()
   if not ctags then return end
   if not force and vim.fn.filereadable(tags_file) == 1 then return end
-  -- ctags refuses to overwrite a target that "doesn't look like a tag file" — e.g.
-  -- an empty/garbage file left by an interrupted or killed run. We always regenerate,
-  -- so remove any existing target first; ctags then writes a fresh file with no refusal.
-  vim.fn.delete(tags_file)
-  vim.system({ ctags, "-R", "--tag-relative=never", "--fields=+n", "--exclude=.git",
-    "-f", tags_file, root }, { text = true }, vim.schedule_wrap(function(res)
-    if res.code ~= 0 then
-      vim.notify("review_view: ctags failed: " .. (res.stderr or ""), vim.log.levels.WARN)
+  -- Already indexing this repo: remember that another rebuild was asked for and
+  -- run it once the current one finishes, rather than racing it.
+  if running[tags_file] then
+    running[tags_file].pending = true
+    return
+  end
+  running[tags_file] = { pending = false }
+
+  -- Build into a scratch file and rename into place: ctags refuses to overwrite a
+  -- target that "doesn't look like a tag file" (e.g. leftovers from a killed run),
+  -- and the rename keeps `tags_file` readable and complete the whole time.
+  -- Pid-scoped so a second Neovim reviewing the same repo can't clobber this run
+  -- either (the tags path is derived from the repo root, so it is shared).
+  local tmp = ("%s.%d.building"):format(tags_file, vim.uv.os_getpid())
+  vim.fn.delete(tmp)
+  -- --quiet drops the "Notice: ignoring null tag in ..." spam that minified JS in
+  -- vendored/.venv trees emits by the hundreds — it would otherwise land in the
+  -- failure notify below and paper over the whole screen.
+  vim.system({ ctags, "-R", "--quiet", "--tag-relative=never", "--fields=+n", "--exclude=.git",
+    "-f", tmp, root }, { text = true }, vim.schedule_wrap(function(res)
+    local again = running[tags_file] and running[tags_file].pending
+    running[tags_file] = nil
+    if res.code == 0 then
+      vim.uv.fs_rename(tmp, tags_file)
+    else
+      vim.fn.delete(tmp)
+      -- Keep this to a single line that fits the command area: a multi-line or
+      -- wrapping notify triggers the hit-enter prompt, and a failed background
+      -- reindex isn't worth interrupting the review for.
+      local first = vim.split(vim.trim(res.stderr or ""), "\n", { plain = true })[1]
+      local msg = "review_view: ctags failed: " .. (first ~= "" and first or "exit " .. res.code)
+      local maxw = math.max(40, vim.o.columns - 12)
+      if vim.fn.strdisplaywidth(msg) > maxw then msg = msg:sub(1, maxw - 1) .. "…" end
+      vim.notify(msg, vim.log.levels.WARN)
     end
+    if again then M.ensure(root, tags_file, true) end
   end))
 end
 
