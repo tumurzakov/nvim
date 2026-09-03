@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Replay stored review findings into the gR review view.
+#
+# A review_view checker: given a repo-relative path, print the findings recorded
+# for that file as `LOC: <file>:<line> <message>` lines, which review_view maps
+# onto the diff rows and merges into the quickfix list (]q / [q).
+#
+# USAGE
+#   review-findings-loc <repo-relative-path>
+#   review-findings-loc --which          # print the findings file that would be used
+#
+#   Registered in lua/config/settings_local.lua:
+#     M.review_view = {
+#       checkers = {
+#         { name = "notes",
+#           cmd = { vim.fn.expand("~/.config/nvim/scripts/review-findings-loc"), "${path}" },
+#           input = "none" },
+#       },
+#     }
+#
+# FINDINGS FILE
+#   Tab-separated, one finding per line:
+#       <repo-relative-path><TAB><new-file line><TAB><message>
+#   Blank lines and lines starting with `#` are ignored. A message must stay on
+#   one line and the path must not contain a colon (review_view's parser splits
+#   on the first one).
+#
+#   Findings live beside the review they belong to, in the ticket folder:
+#       ~/sources/nbs-art/tasks/<TICKET>/<name>findings.tsv
+#   The most recently modified match wins, so preparing a new review is just a
+#   matter of writing its file — no nvim config change. `:ReviewMR` reviews run in
+#   a throwaway worktree under $TMPDIR, so the file cannot be found relative to
+#   the checkout; it is looked up in the task tree instead.
+#
+# ENVIRONMENT VARIABLES
+#   REVIEW_FINDINGS        exact findings file to read; skips the search entirely
+#   REVIEW_FINDINGS_ROOT   tree searched for *findings.tsv
+#                          (default: ~/sources/nbs-art/tasks)
+#
+# EXAMPLES
+#   review-findings-loc src/lib/workspace.py
+#   review-findings-loc --which
+#   REVIEW_FINDINGS=~/sources/nbs-art/tasks/NBSART-754/mr14-findings.tsv \
+#     review-findings-loc src/lib/schemas.py
+#
+# Exits 0 when no findings file is found or it holds nothing for this file, so an
+# unprepared review is silent rather than a warning on every file you open.
+
+set -euo pipefail
+
+ROOT=${REVIEW_FINDINGS_ROOT:-$HOME/sources/nbs-art/tasks}
+
+# The newest *findings.tsv under $ROOT, or empty. Portable to BSD find/stat: the
+# mtime is printed as an epoch prefix, sorted numerically, then stripped.
+newest_findings() {
+  [ -d "$ROOT" ] || return 0
+  find "$ROOT" -type f -name '*findings.tsv' -print0 2>/dev/null |
+    xargs -0 -I{} stat -f '%m %N' {} 2>/dev/null |
+    sort -rn | head -1 | cut -d' ' -f2-
+}
+
+resolve() {
+  if [ -n "${REVIEW_FINDINGS:-}" ]; then
+    printf '%s\n' "$REVIEW_FINDINGS"
+  else
+    newest_findings
+  fi
+}
+
+case "${1:-}" in
+  -h | --help | "")
+    sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  --which)
+    found=$(resolve)
+    if [ -n "$found" ]; then printf '%s\n' "$found"; else echo "no *findings.tsv under $ROOT"; fi
+    exit 0
+    ;;
+esac
+
+path=$1
+findings=$(resolve)
+
+[ -n "$findings" ] && [ -r "$findings" ] || exit 0
+
+awk -F '\t' -v want="$path" '
+  /^[[:space:]]*(#|$)/ { next }
+  NF < 3              { next }
+  $1 == want          { printf "LOC: %s:%s %s\n", $1, $2, $3 }
+' "$findings"

@@ -30,3 +30,4 @@ require("config.md_server").setup()
 
 -- :ReviewMR <gitlab-mr-url> — fetch a peer MR's head and open gR vs develop
 require("config.review_mr")
+require("config.review_findings").setup()

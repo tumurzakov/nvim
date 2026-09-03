@@ -702,6 +702,9 @@ local function paint_dels(st, path)
 end
 
 -- Display a file's diff in the right pane (no checker run).
+-- Defined below, once publish() and ensure_qf_open() are in scope.
+local apply_findings
+
 local function show_file(st, entry)
   if not entry then return end
   local buf = ensure_file_buf(st, entry)
@@ -715,6 +718,7 @@ local function show_file(st, entry)
   if st.sidebar_buf and vim.api.nvim_buf_is_valid(st.sidebar_buf) then
     render_sidebar(st.sidebar_buf, st)
   end
+  apply_findings(st, entry)
 end
 
 -- Resolve the configured checker list. Falls back to a single AI checker built
@@ -795,6 +799,59 @@ local function ensure_qf_open()
   end
   local qbuf = vim.api.nvim_win_get_buf(qf_win)
   vim.keymap.set("n", "<CR>", function() M.qf_jump() end, { buffer = qbuf, nowait = true, silent = true })
+end
+
+-- Replay the findings of a recorded review (:ReviewFindings) onto this file.
+-- Nothing is executed: the findings were produced elsewhere, so opening a file
+-- annotates it without invoking any checker. `r` still runs the real ones.
+-- The commit this review is showing: the checkpoint being browsed, else HEAD.
+-- Cached per ref and invalidated by M.refresh(), so a commit/amend re-resolves —
+-- a stale value here would match findings written against the previous commit.
+local function reviewed_sha(st)
+  local ref = st.view_ref or "HEAD"
+  if st.head_sha == nil or st.head_sha_ref ~= ref then
+    local okh, outh = git(st.root, { "rev-parse", ref })
+    st.head_sha, st.head_sha_ref = (okh and outh[1]) or false, ref
+  end
+  return st.head_sha or nil
+end
+
+apply_findings = function(st, entry)
+  local rf = require("config.review_findings")
+  local path = entry and entry.path
+  if not path then return end
+  -- First file of a review: look for its findings by ticket key, else by MR number.
+  rf.auto({ head_ref = st.head_ref, mr_iid = st.mr_iid, repo = st.repo,
+    head = reviewed_sha(st), root = st.root })
+  local notes = rf.for_file(path)
+
+  -- Drop this file's previously replayed findings first: when the active review was
+  -- cleared or belongs to another commit, `notes` is nil/empty and the old [review]
+  -- entries must go rather than linger over a diff they no longer describe.
+  local before = #st.items
+  st.items = vim.tbl_filter(function(it) return it._checker ~= "review" or it._file ~= path end,
+    st.items)
+  local dropped = before > #st.items
+  if not notes and not dropped then return end   -- no review active, nothing stale
+
+  if notes and #notes > 0 then
+    local buf, _, linemap = ensure_file_buf(st, entry)
+    for _, f in ipairs(notes) do
+      table.insert(st.items, {
+        bufnr = buf, lnum = map_line(linemap, f.line), col = 1,
+        text = "[review] " .. f.msg, type = "W",
+        _file = path, _checker = "review",
+      })
+    end
+  end
+  publish(st)
+  if notes and #notes > 0 then ensure_qf_open() end
+end
+
+-- Re-apply to the file on screen; called when :ReviewFindings loads or clears.
+function M.reapply_findings()
+  sync()
+  if S and S.current_file then apply_findings(S, S.current_file) end
 end
 
 -- Substitute ${file} / ${path} placeholders in a checker's argv.
@@ -1254,6 +1311,7 @@ function M.refresh()
   st.file_bufs, st.diffs, st.linemaps, st.dels = {}, {}, {}, {}
   st.items, st.done, st.inflight = {}, {}, {}
   st.current_file = nil
+  st.head_sha, st.head_sha_ref = nil, nil   -- HEAD may have moved (commit/amend/checkout)
   -- deleting the file buffers above already cleared their diagnostics; only clear
   -- the shared quickfix (this review owns the active tab during a user refresh).
   vim.fn.setqflist({}, "r", { title = "Review checkers", items = {} })
