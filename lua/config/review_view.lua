@@ -4,6 +4,10 @@
 --   left  = grouped/indented list of files changed in <base>...HEAD (feature vs default)
 --   right = a SINGLE unified red(-)/green(+) diff buffer for the selected file
 --
+-- The sidebar also lists the branch's commits. ⏎/s browse one as a checkpoint, and
+-- `a`/`b` (or <S-Up>/<S-Down>) mark two of them to review just that inclusive range
+-- instead of the whole branch — `T` flips between the two.
+--
 -- Pressing `r` on a file runs the `claude` agent review on that one file. Findings
 -- (LOC: <file>:<line> <msg>) are mapped from new-file line numbers onto rows of the
 -- unified diff buffer, then published as quickfix entries that reference the diff
@@ -250,6 +254,63 @@ local function fit(s, w)
   return s
 end
 
+-- ---------------------------------------------------------------------------
+-- Commit-range selection (the sidebar's `a` / `b` marks).
+--
+-- The checkpoint rows form one ordered list: index 1 = the working tree ("live"),
+-- then the branch's commits newest→oldest. A mark is that list's identity token —
+-- "live" or a commit sha — so marks survive a refresh that re-lists the commits.
+--
+-- Two marks view their INCLUSIVE range: the combined change of every checkpoint
+-- between them, both ends counted. The older end therefore contributes its own
+-- change (left side = <older>~1), and a range reaching the live row is diffed
+-- against the working tree instead of a commit.
+-- ---------------------------------------------------------------------------
+
+-- Position of mark token `tok` in the checkpoint list, or nil once its commit is gone.
+local function target_index(st, tok)
+  if tok == "live" then return 1 end
+  for i, c in ipairs(st.commits or {}) do
+    if c.sha == tok then return i + 1 end
+  end
+end
+
+-- Resolve st.mark_a / st.mark_b into the refs to diff, or nil when nothing is
+-- marked. One mark alone is a one-row range: that single commit, or — on the live
+-- row — just the uncommitted changes (HEAD…working tree).
+local function range_refs(st)
+  local ia = st.mark_a and target_index(st, st.mark_a)
+  local ib = st.mark_b and target_index(st, st.mark_b)
+  if not (ia or ib) then return nil end
+  local lo, hi = math.min(ia or ib, ib or ia), math.max(ia or ib, ib or ia)
+  local newer = lo > 1 and st.commits[lo - 1] or nil   -- nil = the working tree
+  local older = hi > 1 and st.commits[hi - 1] or nil
+  return {
+    lo = lo, hi = hi, n = hi - lo + 1,
+    right = newer and newer.sha or nil,
+    left = older and (older.sha .. "~1") or "HEAD",
+    left_label = older and (older.short .. "~1") or "HEAD",
+    older_label = older and older.short or "HEAD",     -- oldest INCLUDED checkpoint
+    newer_label = newer and newer.short or "tree",
+  }
+end
+
+-- Point the view at the currently marked range and rebuild. With both marks
+-- cleared there is no range left, so fall back to the live whole-branch view.
+local function apply_range(st)
+  local r = range_refs(st)
+  if not r then
+    st.view_range = nil
+    return M.view_live()
+  end
+  st.view_range = r
+  st.view_left, st.view_ref = r.left, r.right
+  st.view_short, st.view_single = r.newer_label, nil
+  M.refresh()   -- re-derives the range from the marks, then rebuilds the file list
+  vim.notify(("review_view: range %s..%s (%d checkpoint%s)"):format(
+    r.older_label, r.newer_label, r.n, r.n == 1 and "" or "s"), vim.log.levels.INFO)
+end
+
 local function render_sidebar(buf, st)
   local width = (st.sidebar_win and vim.api.nvim_win_is_valid(st.sidebar_win))
     and vim.api.nvim_win_get_width(st.sidebar_win) or SIDEBAR_WIDTH
@@ -263,19 +324,25 @@ local function render_sidebar(buf, st)
 
   table.insert(lines, " " .. (st.repo or "?"))
   table.insert(hi, { row = #lines - 1, kind = "repo" })
-  local right_label = st.view_ref
-    and (st.view_single and ("commit @" .. st.view_short) or ("@" .. st.view_short))
+  local rng = st.view_range
+  local left_label = rng and rng.left_label or st.base
+  local right_label = rng and rng.newer_label
+    or (st.view_ref and (st.view_single and ("commit @" .. st.view_short) or ("@" .. st.view_short)))
     or st.head_ref
-  table.insert(lines, ("%s → %s  (%d files)"):format(st.base, right_label, #st.files))
-  -- Checkpoint banner: which commit we're viewing "as if it were HEAD", and how to leave.
-  if st.view_ref then
+  table.insert(lines, ("%s → %s  (%d files)"):format(left_label, right_label, #st.files))
+  -- Banner: which non-live view we're in (marked range / checkpoint) and how to leave.
+  if rng then
+    table.insert(lines, ("⟳ range %s..%s (%d)  ·  T branch · gh live"):format(
+      rng.older_label, rng.newer_label, rng.n))
+    table.insert(hi, { row = #lines - 1, kind = "line", hl = "DiagnosticWarn" })
+  elseif st.view_ref then
     local mode = st.view_single and "this commit only" or "as if it were HEAD"
     table.insert(lines, ("⟳ viewing @%s (%s)  ·  gh = live"):format(st.view_short, mode))
     table.insert(hi, { row = #lines - 1, kind = "line", hl = "DiagnosticWarn" })
   end
   -- vs the remote feature branch: spell out push/pull so the arrows aren't cryptic
   local u = st.upstream
-  if u and not st.view_ref then
+  if u and not st.view_ref and not rng then
     local text, ehl
     if not u.has_upstream then
       text, ehl = "⚠ not pushed yet — no remote branch", "DiagnosticWarn"
@@ -294,7 +361,7 @@ local function render_sidebar(buf, st)
     table.insert(lines, text)
     table.insert(hi, { row = #lines - 1, kind = "line", hl = ehl })
   end
-  if not st.view_ref then
+  if not st.view_ref and not rng then
     table.insert(lines, "↑ unpushed  ● uncommitted  + new")
     -- Only worth a line when it applies: a file back at base but still ≠ HEAD is
     -- rare, and its +/- counts are against HEAD rather than the base.
@@ -375,25 +442,49 @@ local function render_sidebar(buf, st)
   if st.commits and #st.commits > 0 then
     local collapsed = st.collapsed[COMMITS_KEY]
     table.insert(lines, "")
-    table.insert(lines, ("%s Commits  (%d)  ⏎ checkpoint · s single"):format(
+    table.insert(lines, ("%s Commits  (%d)  ⏎view  s=one  a/b=range"):format(
       collapsed and "▸" or "▾", #st.commits))
     dir_index[#lines] = COMMITS_KEY
     table.insert(hi, { row = #lines - 1, kind = "dir" })
     if not collapsed then
+      -- Range column (col 0): a / b on the marked ends, │ on the rows between them.
+      -- Drawn from the marks, not from st.view_range, so marks stay visible while
+      -- you look at something else (T flips back to them).
+      local ia = st.mark_a and target_index(st, st.mark_a)
+      local ib = st.mark_b and target_index(st, st.mark_b)
+      local rlo, rhi
+      if ia or ib then rlo, rhi = math.min(ia or ib, ib or ia), math.max(ia or ib, ib or ia) end
+      local function sel(i)
+        if i == ia then return "a" end
+        if i == ib then return "b" end
+        if rlo and i > rlo and i < rhi then return "│" end
+        return " "
+      end
+      -- Row prefix, matching the file rows' width-4 gutter: range mark, space,
+      -- active marker (◆/●), space. Both marks may be multibyte, so the highlight
+      -- columns are derived from the strings rather than hard-coded.
+      local function commit_row(i, mk, text)
+        local s = sel(i)
+        local prefix = s .. " " .. mk .. " "
+        table.insert(lines, fit(prefix .. text, width - 1))
+        if s ~= " " then
+          table.insert(hi, { row = #lines - 1, kind = "mark", a = 0, b = #s,
+            hl = (s == "│") and "Comment" or "ReviewViewTicket" })
+        end
+        if mk ~= " " then
+          table.insert(hi, { row = #lines - 1, kind = "mark", a = #s + 1, b = #s + 1 + #mk, hl = "ReviewViewNew" })
+        end
+        return #prefix
+      end
       -- live / working-tree row: return to the normal (HEAD + uncommitted) view
-      local active = not st.view_ref
-      table.insert(lines, ("  %s working tree (live)"):format(active and "◆" or " "))
+      local active = not st.view_ref and not st.view_range
+      commit_row(1, active and "◆" or " ", "working tree (live)")
       line_index[#lines] = { live = true }
-      if active then table.insert(hi, { row = #lines - 1, kind = "mark", a = 2, b = 2 + #"◆", hl = "ReviewViewNew" }) end
-      for _, c in ipairs(st.commits) do
-        local cur = st.view_ref == c.sha
-        local mk = cur and "●" or " "
-        local prefix = "  " .. mk .. " "   -- 2 spaces + marker + space (marker may be multibyte)
-        local text = fit(prefix .. c.short .. " " .. (c.subject or ""), width - 1)
-        table.insert(lines, text)
+      for i, c in ipairs(st.commits) do
+        local cur = st.view_ref == c.sha and not st.view_range
+        local plen = commit_row(i + 1, cur and "●" or " ", c.short .. " " .. (c.subject or ""))
         line_index[#lines] = { commit = c.sha, short = c.short }
-        if cur then table.insert(hi, { row = #lines - 1, kind = "mark", a = 2, b = 2 + #mk, hl = "ReviewViewNew" }) end
-        table.insert(hi, { row = #lines - 1, kind = "commitsha", a = #prefix, b = #prefix + #c.short })
+        table.insert(hi, { row = #lines - 1, kind = "commitsha", a = plen, b = plen + #c.short })
       end
     end
   end
@@ -481,6 +572,7 @@ local function setup_diff_keymaps(buf)
   vim.keymap.set("n", "A", function() M.amend() end, o)
   vim.keymap.set("n", "gJ", function() M.open_ticket() end, o)
   vim.keymap.set("n", "gh", function() M.view_live() end, o)
+  vim.keymap.set("n", "T", function() M.toggle_range() end, o)
   vim.keymap.set("n", "X", function() M.revert_under_cursor() end, o)
   -- J/K step files, U/D step commits — so you can flip through the review without
   -- leaving the diff pane (read-only, so these safely shadow join/undo/delete).
@@ -1319,7 +1411,20 @@ function M.refresh()
   -- (re)list the branch's commits; if the commit we're viewing has vanished (rebase,
   -- amend, reset), fall back to the live view rather than diffing against a dead sha.
   st.commits = list_commits(st.root, st.merge_base, "HEAD", 200)
-  if st.view_ref then
+  -- Drop range marks whose commit no longer exists (rebase / amend / reset).
+  if st.mark_a and not target_index(st, st.mark_a) then st.mark_a = nil end
+  if st.mark_b and not target_index(st, st.mark_b) then st.mark_b = nil end
+  if st.view_range then
+    -- Re-derive the range from the marks: the shas are stable but their positions
+    -- (and so the resolved ends) may have shifted since the range was applied.
+    local r = range_refs(st)
+    st.view_range, st.view_single = r, nil
+    st.view_left, st.view_ref = r and r.left, r and r.right
+    st.view_short = r and r.newer_label
+    if not r then
+      vim.notify("review_view: the marked commits are gone (rebase/amend?) — back to live", vim.log.levels.WARN)
+    end
+  elseif st.view_ref then
     local alive = false
     for _, c in ipairs(st.commits) do if c.sha == st.view_ref then alive = true break end end
     if not alive then
@@ -1331,7 +1436,10 @@ function M.refresh()
   if st.view_ref then
     st.files = collect_files_at(st.root, (st.view_left or st.merge_base), st.view_ref)
   else
-    st.files = collect_files(st.root, st.base, st.merge_base, st.head_ref, st.pushed_ref)
+    -- A range whose newer end is the working tree keeps the live view's
+    -- dirty/untracked bookkeeping, just measured from the range's left ref.
+    st.files = collect_files(st.root, st.view_left or st.base,
+      st.view_left or st.merge_base, st.head_ref, st.pushed_ref)
   end
   st.upstream = upstream_status(st.root)
   ensure_tags(st, true) -- code may have moved since last index
@@ -1369,6 +1477,7 @@ function M.view_commit(sha, opts)
   st.view_ref = sha
   st.view_single = opts.single or nil
   st.view_left = opts.single and (sha .. "~1") or nil
+  st.view_range = nil   -- a checkpoint replaces the range view; the marks stay for T
   st.view_short = sha:sub(1, 8)
   for _, c in ipairs(st.commits or {}) do if c.sha == sha then st.view_short = c.short; break end end
   M.refresh()
@@ -1376,14 +1485,15 @@ function M.view_commit(sha, opts)
     st.view_short, opts.single and "this commit only" or "as if it were HEAD"), vim.log.levels.INFO)
 end
 
--- Return to the live view: HEAD plus uncommitted edits and untracked files.
+-- Return to the live view: the whole branch vs the base — HEAD plus uncommitted
+-- edits and untracked files. Range marks are kept so T can flip back to them.
 function M.view_live()
   local st = sync()
   if not st then return end
-  if not st.view_ref then return end
-  st.view_ref, st.view_left, st.view_short, st.view_single = nil, nil, nil, nil
+  if not (st.view_ref or st.view_left or st.view_range) then return end
+  st.view_ref, st.view_left, st.view_short, st.view_single, st.view_range = nil, nil, nil, nil, nil
   M.refresh()
-  vim.notify("review_view: back to live (working tree)", vim.log.levels.INFO)
+  vim.notify(("review_view: back to live (whole branch vs %s)"):format(st.base), vim.log.levels.INFO)
 end
 
 -- The visible file rows in sidebar order, as { row, entry }. Skips folder headers
@@ -1452,6 +1562,95 @@ local function entry_under_cursor()
   if not sync() then return nil end
   local row = vim.api.nvim_win_get_cursor(0)[1]
   return S.line_index and S.line_index[row]
+end
+
+-- The checkpoint the sidebar cursor is on, as a mark token ("live" or a sha), or nil.
+local function token_under_cursor()
+  local e = entry_under_cursor()
+  return e and ((e.live and "live") or e.commit) or nil
+end
+
+-- Park the sidebar cursor on the checkpoint row for mark token `tok`. Each view
+-- carries a different number of banner lines, so without this the cursor would
+-- silently end up on a different commit than the one you just acted on.
+local function focus_checkpoint(st, tok)
+  if not (tok and st.sidebar_win and vim.api.nvim_win_is_valid(st.sidebar_win)) then return end
+  for row, e in pairs(st.line_index or {}) do
+    if (tok == "live" and e.live) or (e.commit and e.commit == tok) then
+      pcall(vim.api.nvim_win_set_cursor, st.sidebar_win, { row, 0 })
+      return
+    end
+  end
+end
+
+-- a / b: set that end of the range to the commit (or "working tree") under the
+-- cursor; the same key on the row it already marks clears it. The view follows
+-- each change, so the range is always what you're looking at.
+function M.mark_range(which)
+  local st = sync()
+  if not st then return end
+  local tok = token_under_cursor()
+  if not tok then
+    vim.notify("review_view: put the cursor on a commit row (or 'working tree') to mark it",
+      vim.log.levels.WARN)
+    return
+  end
+  local key = "mark_" .. which
+  st[key] = (st[key] ~= tok) and tok or nil
+  apply_range(st)
+  focus_checkpoint(st, tok)
+end
+
+-- <S-Up>/<S-Down>: grow or shrink the range one checkpoint at a time. `a` is the
+-- anchor and `b` the moving end; with nothing marked yet, anchor on the row under
+-- the cursor (or on whatever is currently in view).
+function M.extend_range(dir)
+  local st = sync()
+  if not st then return end
+  local targets = { "live" }
+  for _, c in ipairs(st.commits or {}) do targets[#targets + 1] = c.sha end
+  if not st.mark_a then
+    st.mark_a = token_under_cursor() or st.view_ref or "live"
+    st.mark_b = nil
+  end
+  local nxt = (target_index(st, st.mark_b or st.mark_a) or 1) + dir
+  if nxt < 1 or nxt > #targets then return end
+  st.mark_b = targets[nxt]
+  apply_range(st)
+  focus_checkpoint(st, st.mark_b)   -- follow the moving end
+end
+
+-- T: flip between the narrow view and the whole branch vs the base, keeping the
+-- marks either way — so you can compare "just these commits" against "everything".
+-- With nothing marked it defaults to everything since the PREVIOUS commit: the
+-- newest commit's own change plus any uncommitted edits on top of it (on a clean
+-- tree, exactly <HEAD~1>…<HEAD>). It sets the marks rather than adding a hidden
+-- mode, so the pair stays visible in the gutter and T keeps toggling it.
+function M.toggle_range()
+  local st = sync()
+  if not st then return end
+  local here = token_under_cursor()
+  if st.view_range or st.view_ref then
+    M.view_live()
+  else
+    if not (st.mark_a or st.mark_b) then
+      st.mark_a = "live"
+      st.mark_b = st.commits and st.commits[1] and st.commits[1].sha or nil
+    end
+    apply_range(st)
+  end
+  focus_checkpoint(st, here)
+end
+
+-- <Esc>: drop both marks and go back to the whole-branch view.
+function M.clear_range()
+  local st = sync()
+  if not st then return end
+  if not (st.mark_a or st.mark_b) then return end
+  local here = token_under_cursor()
+  st.mark_a, st.mark_b = nil, nil
+  apply_range(st)
+  focus_checkpoint(st, here)
 end
 
 -- Toggle the directory header under the cursor; re-render keeping the cursor on it.
@@ -1524,9 +1723,20 @@ local function build_ui(st)
     "    ⏎ on 'working tree (live)' or gh anywhere    back to the live view",
     "    U / D   step commits up (→ live) / down (→ older), file follows",
     "",
+    "  COMMIT RANGE   diff a span of commits instead of the whole branch",
+    "    a / b   mark the two ends (same key on a marked row clears it)",
+    "    <S-Up> / <S-Down>   grow / shrink the range   ·   <Esc>  clear marks",
+    "    The range is INCLUSIVE: the combined change of every marked commit.",
+    "    Mark 'working tree (live)' as an end to diff against your edits —",
+    "    marking it alone shows just the uncommitted changes (vs HEAD).",
+    "    T       toggle  marked range  ⇄  whole branch vs the base;",
+    "            with nothing marked: everything since the previous commit",
+    "",
     "  SIDEBAR (file list)",
     "    ⏎      show diff / fold / ticket     r        run checkers",
     "    J / K   next / prev file             U / D    step commits (→live / →older)",
+    "    a / b   mark commit range ends       T        range ⇄ whole branch",
+    "                                            (unmarked: since prev commit)",
     "    gJ      open Jira ticket (asks for key if unknown) → main window + tasks/",
     "    Tab/za  fold folder                  zM/zR    fold / unfold all",
     "    X       revert WHOLE file → base     C        CodeCompanion chat",
@@ -1539,6 +1749,7 @@ local function build_ui(st)
     "  DIFF PANE",
     "    e       edit file in a tab           C        CodeCompanion (n/v)",
     "    J / K   next / prev file             U / D    step commits (→live / →older)",
+    "    T       range ⇄ whole branch         gh       back to live",
     "    <C-]>   go to definition (gd/]d)     <C-t>    jump back  ·  r  run checkers",
     "    B       rebase onto latest base      P        push (Force option)",
     "    c       commit (AI message, editable)   A     amend last commit",
@@ -1594,17 +1805,25 @@ local function build_ui(st)
     -- node → back to the working tree. Folder header → fold/unfold. File → show diff.
     local e = entry_under_cursor()
     if e and e.ticket then M.show_ticket(); return end
-    if e and e.live then M.view_live(); return end
-    if e and e.commit then M.view_commit(e.commit); return end
+    if e and e.live then M.view_live(); focus_checkpoint(st, "live"); return end
+    if e and e.commit then M.view_commit(e.commit); focus_checkpoint(st, e.commit); return end
     if toggle_fold(st) then return end
     if e then show_file(st, e) end
   end, o)
   -- `s` on a commit node: view ONLY that commit's own change (its parent…commit).
   vim.keymap.set("n", "s", function()
     local e = entry_under_cursor()
-    if e and e.commit then M.view_commit(e.commit, { single = true }) end
+    if e and e.commit then M.view_commit(e.commit, { single = true }); focus_checkpoint(st, e.commit) end
   end, o)
   vim.keymap.set("n", "gh", function() M.view_live() end, o)
+  -- Commit-range marks. `a` / `b` shadow append / word-back, which are meaningless
+  -- in this read-only list.
+  vim.keymap.set("n", "a", function() M.mark_range("a") end, o)
+  vim.keymap.set("n", "b", function() M.mark_range("b") end, o)
+  vim.keymap.set("n", "<S-Up>", function() M.extend_range(-1) end, o)
+  vim.keymap.set("n", "<S-Down>", function() M.extend_range(1) end, o)
+  vim.keymap.set("n", "T", function() M.toggle_range() end, o)
+  vim.keymap.set("n", "<Esc>", function() M.clear_range() end, o)
   vim.keymap.set("n", "r", function()
     local e = entry_under_cursor()
     if e and not e.ticket and not e.commit and not e.live then run_checkers(st, e, { force = true }) end
@@ -1694,6 +1913,7 @@ function M.open(path, opts)
     files = files, collapsed = {},
     commits = list_commits(root, merge_base, "HEAD", 200),  -- checkpoints to browse
     view_ref = nil, view_left = nil, view_short = nil, view_single = nil,  -- live by default
+    mark_a = nil, mark_b = nil, view_range = nil,   -- commit-range marks (a/b) + resolved range
     file_bufs = {}, diffs = {}, linemaps = {}, dels = {},  -- per-file caches
     items = {},                                 -- accumulated quickfix items (tagged _file/_checker)
     inflight = {}, done = {},                    -- path -> running count / completed
@@ -1731,6 +1951,9 @@ end
 function M.view_tag_for(bufnr)
   local st = review_for_buf(bufnr or vim.api.nvim_get_current_buf())
   if not st then return "" end
+  if st.view_range then
+    return st.view_range.older_label .. ".." .. st.view_range.newer_label
+  end
   if st.view_ref then
     return (st.view_single and "commit @" or "@") .. (st.view_short or st.view_ref:sub(1, 8))
   end
@@ -2033,7 +2256,8 @@ function M.codecompanion(opts)
   if not st.diffs[path] then ensure_file_buf(st, entry) end
 
   local parts = {}
-  local right_desc = st.view_ref and ("commit " .. st.view_short) or "working tree"
+  local right_desc = (st.view_range and st.view_range.right and ("commit " .. st.view_short))
+    or (st.view_ref and ("commit " .. st.view_short)) or "working tree"
   table.insert(parts, ("Reviewing `%s` (`%s` → %s) in repo `%s`."):format(
     path, (st.view_left or st.base), right_desc, rc.repo_name(st.root)))
 
