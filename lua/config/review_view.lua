@@ -448,10 +448,11 @@ local function render_sidebar(buf, st)
     table.insert(hi, { row = #lines - 1, kind = "dir" })
     if not collapsed then
       -- Range column (col 0): a / b on the marked ends, │ on the rows between them.
-      -- Drawn from the marks, not from st.view_range, so marks stay visible while
-      -- you look at something else (T flips back to them).
-      local ia = st.mark_a and target_index(st, st.mark_a)
-      local ib = st.mark_b and target_index(st, st.mark_b)
+      -- Only while the range is what you're looking at — in the whole-branch or a
+      -- checkpoint view the marks describe nothing on screen, so the column stays
+      -- blank (its width is kept, so the rows still line up with the file list).
+      local ia = st.view_range and st.mark_a and target_index(st, st.mark_a)
+      local ib = st.view_range and st.mark_b and target_index(st, st.mark_b)
       local rlo, rhi
       if ia or ib then rlo, rhi = math.min(ia or ib, ib or ia), math.max(ia or ib, ib or ia) end
       local function sel(i)
