@@ -25,9 +25,6 @@ require("config.agenda").setup()
 -- Voice dictation (Vosk)
 require("config.dictation")
 
--- Local HTTP file/markdown preview server (auto-starts, serves cwd on localhost)
-require("config.md_server").setup()
-
 -- :ReviewMR <gitlab-mr-url> — fetch a peer MR's head and open gR vs develop
 require("config.review_mr")
 require("config.review_findings").setup()

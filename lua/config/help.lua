@@ -31,7 +31,7 @@ local vim_text = [[
  WINDOW           SPEECH               WEB
  F3   Zoom split  F8   Read/stop      \mm  Markdown → browser
                   \ss  Speak sel     \ms  Stop md server
-                  \sq  Stop speaking
+                  \sq  Stop speaking     (preview outlives nvim)
                   F10  Dictate (voice → text)
 
  GIT & REVIEW

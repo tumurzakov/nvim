@@ -8,19 +8,35 @@ Every file under --root is reachable by its path:
   - any other file is served raw (so images referenced from markdown work).
 
 Files are read from disk on every request, so the browser always reflects the
-latest save. Binds to 127.0.0.1 only and refuses paths outside --root.
+latest save. Binds to 127.0.0.1 only and refuses paths outside the served root.
+
+The process outlives the editor that spawned it, so one server is shared by every
+nvim on the machine. --token turns on a control channel for steering it:
+
+  /__ctl/<token>/info              -> {"root": ..., "pid": ...}
+  /__ctl/<token>/reroot?path=<dir> -> serve <dir> instead, without a restart
+  /__ctl/<token>/quit              -> shut down
+
+The token is read from a 0600 file only this user's nvim can open, so a web page
+that guesses the port still cannot re-root or stop the server behind your back.
+A wrong token falls through to the normal 404, revealing nothing.
 
 Markdown rendering: pandoc (preferred) -> python `markdown` module -> raw <pre>.
 """
 import argparse
+import hmac
 import html
+import json
 import mimetypes
 import os
 import subprocess
+import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MD_EXTS = (".md", ".markdown", ".mdown", ".mkd")
+CTL_PREFIX = "/__ctl/"
+JSON = "application/json; charset=utf-8"
 
 CSS = """
 :root { color-scheme: light dark; }
@@ -181,7 +197,9 @@ def dir_listing(abspath, relpath):
     return body
 
 
-def make_handler(root):
+def make_handler(state, token):
+    """`state` holds the mutable served root, so /reroot takes effect in place."""
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):  # silence stderr access logs
             pass
@@ -200,14 +218,44 @@ def make_handler(root):
 
         def _resolve(self, urlpath):
             """Map a URL path to an absolute path under root, or None if it escapes."""
+            root = state["root"]
             rel = urllib.parse.unquote(urlpath.split("?", 1)[0]).lstrip("/")
             abspath = os.path.realpath(os.path.join(root, rel))
             if abspath != root and not abspath.startswith(root + os.sep):
                 return None, rel
             return abspath, rel
 
+        def _control(self, path):
+            """Serve /__ctl/<token>/<action>. False = not ours, fall through to 404."""
+            if not token or not path.startswith(CTL_PREFIX):
+                return False
+            got, _, action = path[len(CTL_PREFIX):].partition("/")
+            if not hmac.compare_digest(got, token):
+                return False
+            if action == "info":
+                self._send(200, json.dumps({"root": state["root"], "pid": os.getpid()}), JSON)
+            elif action == "reroot":
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                new = os.path.realpath(query.get("path", [""])[0])
+                if not os.path.isdir(new):
+                    self._send(400, json.dumps({"error": "not a directory: " + new}), JSON)
+                else:
+                    state["root"] = new
+                    self._send(200, json.dumps({"root": new}), JSON)
+            elif action == "quit":
+                self._send(200, json.dumps({"ok": True}), JSON)
+                # shutdown() blocks until serve_forever returns, so it cannot run
+                # on the thread still finishing this request.
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+            else:
+                return False
+            return True
+
         def do_GET(self):
             path = urllib.parse.urlparse(self.path).path
+
+            if self._control(path):
+                return
 
             # mtime endpoint used by the live-reload poller: /__mtime/<relpath>
             if path.startswith("/__mtime/"):
@@ -262,11 +310,12 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--port", type=int, default=6419)
     ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--token", default="", help="enable the /__ctl/<token>/ endpoints")
     args = ap.parse_args()
 
-    root = os.path.realpath(args.root)
-    srv = ThreadingHTTPServer((args.host, args.port), make_handler(root))
-    print("serving {} on http://{}:{}".format(root, args.host, args.port), flush=True)
+    state = {"root": os.path.realpath(args.root)}
+    srv = ThreadingHTTPServer((args.host, args.port), make_handler(state, args.token))
+    print("serving {} on http://{}:{}".format(state["root"], args.host, args.port), flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
