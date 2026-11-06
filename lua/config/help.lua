@@ -37,7 +37,7 @@ local vim_text = [[
  GIT & REVIEW
  gR   Patch review (J/K=file U/D=commit a/b=commit range T=range⇄branch r=run e=edit
       c=commit A=amend P=push B=rebase X=revert gJ=jira ]q/[q=nav zM/zR=fold)
- :ReviewMR <gitlab-mr-url>  fetch peer MR → gR vs develop  (gJ=view Jira ticket)
+ :ReviewMR <gitlab-mr-url>  fetch peer MR → gR, same diff as web  (gJ=view Jira ticket)
  \gc  Close review view
  \kd  Drop sel/file:line → Claude kitty tab   \kf  Drop file path
 

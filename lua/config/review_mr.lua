@@ -4,7 +4,8 @@
 --   https://eu.git.epam.com/group/project/-/merge_requests/34 )
 -- and it fetches the MR's head from origin (tokenless, via GitLab's
 -- refs/merge-requests/<iid>/head), checks it out as a local `mr-<iid>` branch,
--- then opens the gR review view — which diffs it against the base (develop).
+-- then opens the gR review view — which fetches the base and diffs against the
+-- remote's copy (origin/develop), so a stale local develop can't skew the review.
 local M = {}
 
 -- host, "group/sub/project", iid  ← from a full MR URL; or nil,nil,iid for a bare number.
@@ -127,7 +128,12 @@ function M.review(arg)
     end
   end
 
-  local base = base_branch()
+  -- Review against the remote's base: the MR targets that, and the local branch
+  -- can lag behind it (the fast-forward is refused while it's checked out, or
+  -- once it has diverged). review_view fetches it before diffing. A base the
+  -- remote doesn't have leaves the choice to review_view.
+  local base = remote_name() .. "/" .. base_branch()
+  local remote_base = git(root, { "rev-parse", "--verify", "--quiet", base }) and base or nil
 
   -- Fetch the MR head, check it out in a throwaway detached worktree, and open
   -- the review. `label` is the branch/ticket shown as the review's head.
@@ -158,10 +164,11 @@ function M.review(arg)
     -- Each MR review opens in its own tab (gR supports several at once).
     require("config.review_view").open(wtdir, {
       head_label = label,
+      base = remote_base,
       mr_iid = iid,   -- the GitLab MR number this review was opened from
       on_close = function() untrack_worktree(root, wtdir) end,
     })
-    vim.notify(("ReviewMR: reviewing !%d (%s) vs %s — working folder untouched"):format(iid, label, base),
+    vim.notify(("ReviewMR: reviewing !%d (%s) vs %s — working folder untouched"):format(iid, label, remote_base or "default base"),
       vim.log.levels.INFO)
   end
 
@@ -192,7 +199,7 @@ end
 
 vim.api.nvim_create_user_command("ReviewMR", function(o) M.review(o.args) end, {
   nargs = "?",
-  desc = "Review a GitLab MR by URL/number (fetch MR head, gR vs develop)",
+  desc = "Review a GitLab MR by URL/number (fetch MR head, gR vs origin/develop)",
 })
 
 return M

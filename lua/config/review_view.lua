@@ -1863,6 +1863,7 @@ end
 
 -- Open the review view for the repo containing `path` (file or directory).
 -- opts.head_label overrides the displayed HEAD name (e.g. a detached MR review);
+-- opts.base overrides the base ref (e.g. origin/develop for an MR review);
 -- opts.on_close is called when the view is closed (e.g. to remove a worktree).
 function M.open(path, opts)
   opts = opts or {}
@@ -1877,7 +1878,7 @@ function M.open(path, opts)
   end
   local root = out[1]
 
-  local base = resolve_base(root)
+  local base = opts.base or resolve_base(root)
   if not base then
     vim.notify("review_view: no base branch found", vim.log.levels.WARN)
     return
