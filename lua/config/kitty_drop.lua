@@ -187,9 +187,9 @@ function M.send_path()
   M.send(p)
 end
 
--- Send a `path:line` reference for the cursor position (source line if in a
--- gR diff buffer).
-function M.send_lineref()
+-- A `path:line` reference for the cursor position (source line if in a gR diff
+-- buffer), with the review header in gR. nil if the buffer has no file.
+function M.lineref_text()
   local buf = vim.api.nvim_get_current_buf()
   local row = vim.api.nvim_win_get_cursor(0)[1]
   local rv = review_view()
@@ -197,26 +197,29 @@ function M.send_lineref()
   if ctx then
     local hdr = review_header(ctx)
     if hdr then
-      M.send(("%s — `%s:%d`"):format(hdr, ctx.file, ctx.l1 or row))
-    else
-      M.send(("`%s:%d`"):format(ctx.file, ctx.l1 or row))
+      return ("%s — `%s:%d`"):format(hdr, ctx.file, ctx.l1 or row)
     end
-    return
+    return ("`%s:%d`"):format(ctx.file, ctx.l1 or row)
   end
   local p = relpath(buf)
-  if not p then vim.notify("kitty_drop: no file in this buffer", vim.log.levels.WARN); return end
-  M.send(("`%s:%d`"):format(p, row))
+  return p and ("`%s:%d`"):format(p, row) or nil
 end
 
--- Send the visual selection with full context. In a gR diff buffer this resolves
--- the real file + source line range and sends the selected hunk as ```diff; on a
--- normal file it sends the code with a `path:Lstart-Lend` header.
-function M.send_visual()
+-- Send a `path:line` reference for the cursor position.
+function M.send_lineref()
+  local text = M.lineref_text()
+  if not text then vim.notify("kitty_drop: no file in this buffer", vim.log.levels.WARN); return end
+  M.send(text)
+end
+
+-- The last visual selection ('< / '>, so leave visual mode first) with full
+-- context. In a gR diff buffer this resolves the real file + source line range
+-- and gives the selected hunk as ```diff; on a normal file it gives the code with
+-- a `path` + line range header. nil if there is no selection.
+function M.visual_text()
   local l1 = vim.fn.getpos("'<")[2]
   local l2 = vim.fn.getpos("'>")[2]
-  if l1 == 0 or l2 == 0 then
-    vim.notify("kitty_drop: no visual selection found", vim.log.levels.WARN); return
-  end
+  if l1 == 0 or l2 == 0 then return nil end
   if l1 > l2 then l1, l2 = l2, l1 end
   local buf = vim.api.nvim_get_current_buf()
 
@@ -240,7 +243,16 @@ function M.send_visual()
     ("In `%s` (lines %d-%d):"):format(file, lo, hi),
     "```" .. ft, table.concat(lines, "\n"), "```", "",
   })
-  M.send(table.concat(parts, "\n"))
+  return table.concat(parts, "\n")
+end
+
+-- Send the visual selection with full context (see visual_text).
+function M.send_visual()
+  local text = M.visual_text()
+  if not text then
+    vim.notify("kitty_drop: no visual selection found", vim.log.levels.WARN); return
+  end
+  M.send(text)
 end
 
 return M

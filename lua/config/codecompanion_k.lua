@@ -6,10 +6,6 @@ local function current_symbol()
   return vim.fn.expand("<cword>")
 end
 
-local function feedkeys(keys)
-  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "n", false)
-end
-
 -- Read the live visual selection using the anchor (getpos "v") and cursor,
 -- NOT the stale '< '> marks which only update after leaving visual mode.
 -- Returns: text, start_line (1-based), end_line (1-based)
@@ -112,79 +108,18 @@ local function get_diagnostics_for_context(sel_start, sel_end)
   return diags
 end
 
-function M.short_explain()
-  local ok, codecompanion = pcall(require, "codecompanion")
-  if not ok then
-    vim.notify("CodeCompanion is not available", vim.log.levels.ERROR)
-    return
-  end
+-- General answer style only; the actual ask comes from the user's question.
+local STYLE_RULES = {
+  "Answer short and precise. Lead with the point, no preamble or padding.",
+  "Write for an experienced developer; skip what is obvious.",
+  "Never use markdown tables, pipe-separated rows or ASCII tables. Prefer bullet lists or labeled lines.",
+  "If the file is on disk, use the read tools for real context instead of guessing.",
+  "Allowed permissions/tools only: " .. TOOL_PERMISSIONS .. ".",
+  "Do not use any other tool, especially container.exec.",
+}
 
-  local symbol = current_symbol()
-  local ctx = current_context()
-  local filetype = vim.bo.filetype
-  local mode = vim.fn.mode()
-  local has_selection = mode:match("[vV\22]") ~= nil
-
-  -- Capture selection via live positions BEFORE exiting visual mode.
-  -- The '< '> marks are stale until after Escape is processed.
-  local selection, sel_start, sel_end
-  if has_selection then
-    selection, sel_start, sel_end = get_live_visual_selection()
-  end
-  local diags = get_diagnostics_for_context(sel_start, sel_end)
-
-  if has_selection then
-    feedkeys("<Esc>")
-  end
-
-  local prompt_lines = {
-    "Explain the meaning, intent, and implications of what is under the cursor or selected.",
-    "Write for an experienced developer. Skip the obvious: do NOT state that it is a comment, "
-      .. "keyword, variable, or function, do NOT restate the syntax, and do NOT explain basic "
-      .. "language mechanics. If the whole answer would be obvious, say so in one line instead of padding.",
-    "Focus on substance: what it actually refers to, WHY it exists, the domain meaning, the specific "
-      .. "case or edge case it handles, and any non-obvious consequences or gotchas. For a comment, "
-      .. "explain the situation it describes and why that matters — not that it is a comment.",
-    "If the file is on disk, use the read tools to read the surrounding code for real context instead "
-      .. "of guessing. If context is genuinely unavailable, say so in one line and give your best inference.",
-    "Be concise and concrete. Lead with the point, not a preamble.",
-    "Never use markdown tables or pipe-separated rows. Use bullet lists or labeled lines instead.",
-    "Allowed permissions/tools only: " .. TOOL_PERMISSIONS .. ".",
-    "Do not use any other tool, especially container.exec.",
-    "",
-    "Symbol: " .. symbol,
-    "File: " .. ctx.filename,
-    "Line: " .. tostring(ctx.line_no),
-    "Current line: " .. ctx.line_text,
-  }
-
-  if #diags > 0 then
-    table.insert(prompt_lines, "")
-    table.insert(prompt_lines, "Diagnostics from Neovim/LSP/linters:")
-    for _, d in ipairs(diags) do
-      table.insert(prompt_lines, "- " .. format_diag(d))
-    end
-    table.insert(prompt_lines, "Explain each diagnostic cause and give concrete fix steps.")
-  end
-
-  if selection and selection ~= "" then
-    -- Fence the selection with the buffer's real filetype (e.g. ```terraform)
-    -- so it is the single, language-tagged block in the prompt.
-    local fence = (filetype ~= "" and filetype) or "text"
-    table.insert(prompt_lines, "Selected text:\n```" .. fence .. "\n" .. selection .. "\n```")
-  end
-
-  local prompt = table.concat(prompt_lines, "\n")
-
-  -- We insert the selection ourselves (above). Force is_visual=false on the
-  -- context handed to CodeCompanion so it does NOT auto-insert the selection a
-  -- second time as its own ```<filetype>``` block. The public chat() API drops
-  -- `stop_context_insertion`, so that flag has no effect — overriding the
-  -- context's is_visual is the only reliable lever (see ui/init.lua render()).
-  local buffer_context = require("codecompanion.utils.context").get(0)
-  buffer_context.is_visual = false
-  buffer_context.is_normal = true
-
+local function open_chat(prompt, buffer_context)
+  local codecompanion = require("codecompanion")
   local chat = codecompanion.chat({
     auto_submit = true,
     context = buffer_context,
@@ -203,6 +138,76 @@ function M.short_explain()
   if chat and chat.ui and chat.ui.winnr and vim.api.nvim_win_is_valid(chat.ui.winnr) then
     vim.api.nvim_set_current_win(chat.ui.winnr)
   end
+end
+
+function M.short_explain()
+  local ok = pcall(require, "codecompanion")
+  if not ok then
+    vim.notify("CodeCompanion is not available", vim.log.levels.ERROR)
+    return
+  end
+
+  local symbol = current_symbol()
+  local ctx = current_context()
+  local mode = vim.fn.mode()
+  local has_selection = mode:match("[vV\22]") ~= nil
+
+  -- Capture selection via live positions BEFORE exiting visual mode.
+  -- The '< '> marks are stale until after Escape is processed.
+  local selection, sel_start, sel_end
+  if has_selection then
+    selection, sel_start, sel_end = get_live_visual_selection()
+  end
+  local diags = get_diagnostics_for_context(sel_start, sel_end)
+
+  -- "x": leave visual mode now, so the <Esc> can't end up cancelling the input below.
+  if has_selection then
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+  end
+
+  -- We insert the selection ourselves (below, via \kd's text). Force is_visual=false on the
+  -- context handed to CodeCompanion so it does NOT auto-insert the selection a
+  -- second time as its own ```<filetype>``` block. The public chat() API drops
+  -- `stop_context_insertion`, so that flag has no effect — overriding the
+  -- context's is_visual is the only reliable lever (see ui/init.lua render()).
+  local buffer_context = require("codecompanion.utils.context").get(0)
+  buffer_context.is_visual = false
+  buffer_context.is_normal = true
+
+  -- Describe the selection / cursor spot exactly like \kd does (repo + review
+  -- range in gR, real path and source lines, deleted lines as a diff).
+  local kd = require("config.kitty_drop")
+  local where = has_selection and kd.visual_text() or kd.lineref_text()
+
+  local target = (selection and selection ~= "") and "the selected text" or "what is under the cursor"
+
+  vim.ui.input({ prompt = "Ask about " .. target .. " (empty = explain): " }, function(question)
+    if question == nil then return end   -- <Esc>: cancelled
+    question = vim.trim(question)
+    if question == "" then
+      question = "Explain " .. target .. "."
+        .. (#diags > 0 and " Also explain each diagnostic's cause and how to fix it." or "")
+    end
+
+    local prompt_lines = vim.list_extend({}, STYLE_RULES)
+    vim.list_extend(prompt_lines, { "", "Question: " .. question, "" })
+    if has_selection and where then
+      table.insert(prompt_lines, where)
+    else
+      if where then table.insert(prompt_lines, "At " .. where .. ", cursor on `" .. symbol .. "`.") end
+      table.insert(prompt_lines, "Current line: " .. ctx.line_text)
+    end
+
+    if #diags > 0 then
+      table.insert(prompt_lines, "")
+      table.insert(prompt_lines, "Diagnostics from Neovim/LSP/linters:")
+      for _, d in ipairs(diags) do
+        table.insert(prompt_lines, "- " .. format_diag(d))
+      end
+    end
+
+    open_chat(table.concat(prompt_lines, "\n"), buffer_context)
+  end)
 end
 
 return M
