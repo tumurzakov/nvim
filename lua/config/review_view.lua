@@ -560,10 +560,14 @@ local function setup_diff_keymaps(buf)
     M.codecompanion({ visual = true })
   end, o)
   vim.keymap.set("n", "e", function() M.edit_under_cursor() end, o)
-  -- Definition jump via the ctags file (set on the buffer in new_scratch). <C-]>,
-  -- g], :tag and <C-t> all work natively; gd/]d are convenience aliases.
-  vim.keymap.set("n", "gd", "<C-]>", { buffer = buf, nowait = true, silent = true, desc = "Review: go to definition" })
-  vim.keymap.set("n", "]d", "<C-]>", { buffer = buf, nowait = true, silent = true, desc = "Review: go to definition" })
+  -- Definition jump via the ctags file (set on the buffer in new_scratch): a target
+  -- in a changed file opens in the review, anything else in the real file. g] and
+  -- :tag stay native; gd/]d are aliases.
+  local function jump() M.tag_jump() end
+  vim.keymap.set("n", "<C-]>", jump, vim.tbl_extend("force", o, { desc = "Review: go to definition" }))
+  vim.keymap.set("n", "gd", jump, vim.tbl_extend("force", o, { desc = "Review: go to definition" }))
+  vim.keymap.set("n", "]d", jump, vim.tbl_extend("force", o, { desc = "Review: go to definition" }))
+  vim.keymap.set("n", "<C-t>", function() M.tag_back() end, vim.tbl_extend("force", o, { desc = "Review: jump back" }))
   vim.keymap.set("n", "r", function() M.run_checkers_current() end, o)
   vim.keymap.set("n", "P", function() M.push() end, o)
   vim.keymap.set("n", "B", function() M.rebase() end, o)
@@ -798,13 +802,13 @@ end
 -- Defined below, once publish() and ensure_qf_open() are in scope.
 local apply_findings
 
-local function show_file(st, entry)
+local function show_file(st, entry, keep_cursor)
   if not entry then return end
   local buf = ensure_file_buf(st, entry)
   st.current_file = entry
   if vim.api.nvim_win_is_valid(st.diff_win) then
     vim.api.nvim_win_set_buf(st.diff_win, buf)
-    pcall(vim.api.nvim_win_set_cursor, st.diff_win, { 1, 0 })
+    if not keep_cursor then pcall(vim.api.nvim_win_set_cursor, st.diff_win, { 1, 0 }) end
     paint_dels(st, entry.path)   -- gutter width is known now the buffer is in the window
   end
   -- keep the ◆ current-file marker in the sidebar tracking the shown file
@@ -812,6 +816,86 @@ local function show_file(st, entry)
     render_sidebar(st.sidebar_buf, st)
   end
   apply_findings(st, entry)
+end
+
+-- Line of tag `t` in `lines`: its search pattern (ctags writes /^text$/, with only
+-- / and \ escaped), else its recorded line number. nil if neither fits.
+local function tag_line(t, lines)
+  local body = t.cmd and t.cmd:match("^[/?](.*)[/?]$")
+  if body then
+    local bol, eol = body:sub(1, 1) == "^", body:sub(-1) == "$" and body:sub(-2) ~= "\\$"
+    body = body:sub(bol and 2 or 1, eol and -2 or -1):gsub("\\([/?\\])", "%1")
+    for n, l in ipairs(lines) do
+      if (bol and eol and l == body)
+          or (not (bol and eol) and l:find(body, 1, true)
+            and (not bol or l:sub(1, #body) == body) and (not eol or l:sub(-#body) == body)) then
+        return n
+      end
+    end
+  end
+  local n = tonumber(t.line) or tonumber(t.cmd)
+  if n and n >= 1 and n <= #lines then return n end
+end
+
+-- <C-]> in a diff pane: if the tag under the cursor is defined in a file this review
+-- changes, show that file's diff at the definition (tag-stack pushed, so <C-t>
+-- returns); otherwise fall back to the native jump into the real file.
+function M.tag_jump()
+  local st = sync()
+  local word = vim.fn.expand("<cword>")
+  local function native()
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-]>", true, false, true), "n", false)
+  end
+  if not st or word == "" then return native() end
+
+  local root = vim.fn.resolve(st.root) .. "/"
+  local by_path = {}
+  for _, e in ipairs(st.files or {}) do by_path[e.path] = e end
+  local ok, tags = pcall(vim.fn.taglist, "^" .. vim.fn.escape(word, "\\^$.*[]~") .. "$")
+  local cur = st.current_file and st.current_file.path
+  local cands = {}
+  for _, t in ipairs(ok and tags or {}) do
+    local f = vim.fn.resolve(vim.fn.fnamemodify(t.filename, ":p"))
+    local rel = f:sub(1, #root) == root and f:sub(#root + 1) or nil
+    if rel and by_path[rel] then
+      -- prefer a definition in the file being viewed
+      table.insert(cands, rel == cur and 1 or #cands + 1, { tag = t, entry = by_path[rel] })
+    end
+  end
+
+  local from = vim.fn.getpos(".")
+  from[1] = vim.api.nvim_get_current_buf()
+  for _, c in ipairs(cands) do
+    local buf = ensure_file_buf(st, c.entry)
+    local lnum = tag_line(c.tag, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    if lnum then
+      local win = vim.api.nvim_get_current_win()
+      vim.fn.settagstack(win, { items = { { tagname = word, from = from } } }, "t")
+      show_file(st, c.entry, true)
+      local line = vim.api.nvim_buf_get_lines(buf, lnum - 1, lnum, false)[1] or ""
+      local col = (line:find(word, 1, true) or 1) - 1
+      pcall(vim.api.nvim_win_set_cursor, st.diff_win, { lnum, col })
+      pcall(vim.cmd, "normal! zz")
+      return
+    end
+  end
+  native()
+end
+
+-- <C-t>: native tag pop, then — if it landed back on a review buffer — re-sync the
+-- sidebar marker / deleted lines / findings to that file without moving the cursor.
+function M.tag_back()
+  local ok, err = pcall(vim.cmd, "pop")
+  if not ok then
+    vim.notify((tostring(err):gsub("^.-(E%d+:)", "%1")), vim.log.levels.ERROR)
+    return
+  end
+  local st = sync()
+  local path = st and M.file_for(vim.api.nvim_get_current_buf())
+  if not path then return end
+  for _, e in ipairs(st.files or {}) do
+    if e.path == path then show_file(st, e, true); break end
+  end
 end
 
 -- Resolve the configured checker list. Falls back to a single AI checker built
@@ -1749,6 +1833,7 @@ local function build_ui(st)
     "",
     "  DIFF PANE",
     "    e       edit file in a tab           C        CodeCompanion (n/v)",
+    "            (a selection takes in the red deleted lines next to it, sent as a diff)",
     "    J / K   next / prev file             U / D    step commits (→live / →older)",
     "    T       range ⇄ whole branch         gh       back to live",
     "    <C-]>   go to definition (gd/]d)     <C-t>    jump back  ·  r  run checkers",
@@ -1991,8 +2076,37 @@ function M.context_for(bufnr, r1, r2)
     end
   end
   local lines = vim.api.nvim_buf_get_lines(bufnr, r1 - 1, r2, false)
+  local ft = vim.bo[bufnr].filetype
+  -- Deleted lines are virt_lines the cursor can't reach, so a selection takes in
+  -- every red block anchored on one of its rows (selecting the line next to a
+  -- block is how you select it) and is then rendered as a -/+ diff snippet.
+  local above, below, any = {}, {}, false
+  for _, d in ipairs((st.dels or {})[path] or {}) do
+    local r = d.row + 1
+    if r >= r1 and r <= r2 then
+      local t = d.above and above or below
+      t[r] = t[r] or {}
+      vim.list_extend(t[r], d.lines)
+      any = true
+    end
+  end
+  if any then
+    local plus = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, HL_NS, { r1 - 1, 0 }, { r2 - 1, -1 },
+        { details = true })) do
+      if m[4].line_hl_group then plus[m[2] + 1] = true end
+    end
+    local out = {}
+    for i, l in ipairs(lines) do
+      local r = r1 + i - 1
+      for _, dl in ipairs(above[r] or {}) do out[#out + 1] = "-" .. dl end
+      out[#out + 1] = (plus[r] and "+" or " ") .. l
+      for _, dl in ipairs(below[r] or {}) do out[#out + 1] = "-" .. dl end
+    end
+    lines, ft = out, "diff"
+  end
   return {
-    file = path, l1 = lo, l2 = hi, lines = lines, ft = vim.bo[bufnr].filetype,
+    file = path, l1 = lo, l2 = hi, lines = lines, ft = ft,
     repo = st.repo, base = st.base, head = st.head_ref,   -- which repo / branches
   }
 end
